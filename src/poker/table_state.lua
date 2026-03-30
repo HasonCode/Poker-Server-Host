@@ -27,6 +27,16 @@ function TableState:occupied_count()
   return n
 end
 
+--- Lowest free seat index, or nil if full.
+function TableState:first_available_seat()
+  for i = 1, self.max_seats do
+    if not self.seats[i] then
+      return i
+    end
+  end
+  return nil
+end
+
 --- @param args { seat: number, player_id: string, chips: number }
 function TableState:seat_player(args)
   local seat = args.seat
@@ -68,6 +78,20 @@ end
 
 function TableState:get_seat(seat)
   return self.seats[seat]
+end
+
+--- @return number|nil seat index if seated
+function TableState:seat_for_player(player_id)
+  if not player_id or player_id == "" then
+    return nil
+  end
+  for i = 1, self.max_seats do
+    local s = self.seats[i]
+    if s and s.player_id == player_id then
+      return i
+    end
+  end
+  return nil
 end
 
 return function(opts)

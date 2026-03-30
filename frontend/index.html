@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poker table</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">♠</span>
+        <div>
+          <h1>Poker server</h1>
+          <p class="sub">Live table state</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="field">
+          <span>Table ID</span>
+          <input type="text" id="tableId" value="demo" autocomplete="off" />
+        </label>
+        <label class="check">
+          <input type="checkbox" id="poll" checked />
+          <span>Auto-refresh (2s)</span>
+        </label>
+        <button type="button" id="refresh" class="btn">Refresh</button>
+      </div>
+    </header>
+
+    <section class="status-bar" id="statusBar" role="status">
+      <span id="connState" class="pill pill-warn">Connecting…</span>
+      <span id="lastFetch" class="muted"></span>
+    </section>
+
+    <main class="grid">
+      <section class="panel table-panel" aria-labelledby="seats-h">
+        <h2 id="seats-h">Seats</h2>
+        <p class="hint">Up to 10 seats · stacks persist between hands</p>
+        <div class="seats" id="seats"></div>
+      </section>
+
+      <section class="panel hand-panel" aria-labelledby="hand-h">
+        <h2 id="hand-h">Current hand</h2>
+        <div class="hand-meta">
+          <div class="stat">
+            <span class="label">Status</span>
+            <span id="handStatus" class="value">—</span>
+          </div>
+          <div class="stat">
+            <span class="label">Street</span>
+            <span id="handStreet" class="value">—</span>
+          </div>
+          <div class="stat highlight">
+            <span class="label">Pot</span>
+            <span id="handPot" class="value mono">0</span>
+          </div>
+        </div>
+        <div class="hand-meta positions">
+          <div class="stat">
+            <span class="label">Button</span>
+            <span id="handBtn" class="value mono">—</span>
+          </div>
+          <div class="stat">
+            <span class="label">SB / BB</span>
+            <span id="handBlinds" class="value mono">—</span>
+          </div>
+          <div class="stat">
+            <span class="label">To act</span>
+            <span id="handAct" class="value mono">—</span>
+          </div>
+          <div class="stat">
+            <span class="label">Min raise</span>
+            <span id="handMinRaise" class="value mono">—</span>
+          </div>
+        </div>
+        <div class="board-wrap">
+          <span class="label">Community</span>
+          <div class="board" id="community"></div>
+        </div>
+        <div class="log-wrap">
+          <span class="label">Action log</span>
+          <ol class="log" id="actionLog"></ol>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <code id="endpoint"></code>
+    </footer>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -9,4 +9,6 @@ poker.http_server = function()
   return require("poker.http_server")
 end
 
+-- Optional HTTP client (LuaSocket): require("poker.client")
+
 return poker
