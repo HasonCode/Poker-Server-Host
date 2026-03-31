@@ -1,6 +1,7 @@
 -- Hand state: SB/BB, button, turn order, betting rounds, min-raise, cannot re-raise self.
 
 local deck_mod = require("poker.deck")
+local hand_eval = require("poker.hand_eval")
 
 local HandState = {}
 HandState.__index = HandState
@@ -47,6 +48,7 @@ function HandState.new(opts)
     occupied_ring = {},
     deck = {},
     hole_cards = {},
+    last_winners = nil,
   }, HandState)
 end
 
@@ -89,6 +91,7 @@ function HandState:snapshot_public()
     contribution = seat_map_to_json(self.contribution),
     folded = seat_map_to_json(self.folded),
     hole_cards = hc,
+    last_winners = self.last_winners,
   }
 end
 
@@ -218,11 +221,97 @@ function HandState:_reset_between_hands()
   self.hole_cards = {}
 end
 
+--- Award pot to the last unfolded player (everyone else folded).
+function HandState:_award_fold_winner(tbl)
+  local winner_seat = nil
+  for _, s in ipairs(self.occupied_ring) do
+    if not self.folded[s] then
+      winner_seat = s
+      break
+    end
+  end
+  if not winner_seat then return end
+
+  local st = tbl:get_seat(winner_seat)
+  if not st then return end
+  local amount = self.pot
+  st.stack = st.stack + amount
+
+  local pid = st.player_id or ("seat_" .. winner_seat)
+  self:_log(pid, winner_seat, "win", amount)
+  self.last_winners = { { seat = winner_seat, player_id = pid, amount = amount, hand_name = "fold" } }
+end
+
+--- Award pot at showdown: evaluate hands, split among winners.
+function HandState:_award_showdown(tbl)
+  local active = {}
+  for _, s in ipairs(self.occupied_ring) do
+    if not self.folded[s] then
+      active[#active + 1] = s
+    end
+  end
+
+  if #active == 0 then return end
+  if #active == 1 then
+    self:_award_fold_winner(tbl)
+    return
+  end
+
+  local evals = {}
+  for _, s in ipairs(active) do
+    local hc = self.hole_cards[s] or {}
+    local all_cards = {}
+    for _, c in ipairs(hc) do all_cards[#all_cards + 1] = c end
+    for _, c in ipairs(self.community) do all_cards[#all_cards + 1] = c end
+    evals[s] = hand_eval.best_of(all_cards)
+  end
+
+  -- Find best eval among active players
+  local best = evals[active[1]]
+  for i = 2, #active do
+    if hand_eval.compare(evals[active[i]], best) > 0 then
+      best = evals[active[i]]
+    end
+  end
+
+  -- Collect all winners (ties split the pot)
+  local winners = {}
+  for _, s in ipairs(active) do
+    if hand_eval.compare(evals[s], best) == 0 then
+      winners[#winners + 1] = s
+    end
+  end
+
+  local share = math.floor(self.pot / #winners)
+  local remainder = self.pot - share * #winners
+
+  self.last_winners = {}
+  for i, s in ipairs(winners) do
+    local st = tbl:get_seat(s)
+    if st then
+      local award = share
+      if i <= remainder then award = award + 1 end
+      st.stack = st.stack + award
+      local pid = st.player_id or ("seat_" .. s)
+      local hname = hand_eval.hand_name(evals[s])
+      self:_log(pid, s, "win", award)
+      self.last_winners[#self.last_winners + 1] = {
+        seat = s, player_id = pid, amount = award, hand_name = hname,
+      }
+    end
+  end
+end
+
+function HandState:_finish_hand(tbl)
+  self.action_to_seat = nil
+  local n = math.max(1, #self.occupied_ring)
+  self.dealer_ring_index = (self.dealer_ring_index + 1) % n
+end
+
 function HandState:_advance_street_or_complete(tbl)
   if self:_count_active() <= 1 then
-    self.action_to_seat = nil
-    local n = math.max(1, #self.occupied_ring)
-    self.dealer_ring_index = (self.dealer_ring_index + 1) % n
+    self:_award_fold_winner(tbl)
+    self:_finish_hand(tbl)
     self:_reset_between_hands()
     return
   end
@@ -243,9 +332,8 @@ function HandState:_advance_street_or_complete(tbl)
     local river = deck_mod.draw(self.deck, 1)
     self.community[5] = river[1]
   elseif self.street == "river" then
-    self.action_to_seat = nil
-    local n = math.max(1, #self.occupied_ring)
-    self.dealer_ring_index = (self.dealer_ring_index + 1) % n
+    self:_award_showdown(tbl)
+    self:_finish_hand(tbl)
     self:_reset_between_hands()
     return
   end
@@ -305,6 +393,7 @@ function HandState:start_hand(tbl)
   self.seq = 0
   self.status = "active"
   self.street = "preflop"
+  self.last_winners = nil
 
   local n = #occ
   local b = self.dealer_ring_index % n

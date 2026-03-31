@@ -166,6 +166,34 @@ function M:match_handler(method, path)
       return h, { table_id = id }
     end
   end
+  id = path:match("^/v1/tables/([^/]+)/leave$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/leave"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
+  id = path:match("^/v1/tables/([^/]+)/bot/start$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/bot/start"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
+  id = path:match("^/v1/tables/([^/]+)/bot/stop$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/bot/stop"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
+  id = path:match("^/v1/tables/([^/]+)/bot/list$")
+  if id and method == "GET" then
+    local h = self.routes["GET /v1/tables/:id/bot/list"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
   return nil
 end
 

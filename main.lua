@@ -76,7 +76,45 @@ local function demo_context()
     ai_players = ai_players,
     action_queue = {},
     _prev_hand_status = nil,
+    running_bots = {},   -- player_id -> { pid, file }
   }
+end
+
+local function detect_lang(filename, content)
+  if filename and filename:match("%.lua$") then return "lua" end
+  if filename and filename:match("%.py$")  then return "python" end
+  if content and content:match("^#!.-python") then return "python" end
+  if content and content:match("^%-%-") then return "lua" end
+  if content and content:match("def%s+decide%s*%(") then return "python" end
+  if content and content:match("function%s+decide%s*%(") then return "lua" end
+  return "python"
+end
+
+local function spawn_bot(root, lang, bot_file, player_id, table_id, port)
+  local cmd
+  local url = "http://127.0.0.1:" .. tostring(port)
+  if lang == "lua" then
+    cmd = string.format(
+      "lua -e 'package.path=\"%s/src/?.lua;%s/src/?/init.lua;\"..package.path' %q --name %q --url %q 2>&1 &\necho $!",
+      root, root, bot_file, player_id, url
+    )
+  else
+    cmd = string.format(
+      "python3 %q %q --name %q --table %q --url %q 2>&1 &\necho $!",
+      root .. "/clients/python/bot_runner.py",
+      bot_file, player_id, table_id, url
+    )
+  end
+  local h = io.popen(cmd, "r")
+  if not h then return nil end
+  local output = h:read("*a")
+  h:close()
+  local pid = output:match("(%d+)%s*$")
+  return pid and tonumber(pid) or nil
+end
+
+local function kill_bot(pid)
+  os.execute("kill " .. tostring(pid) .. " 2>/dev/null")
 end
 
 local function validate_action_shape(action, amount)
@@ -363,6 +401,119 @@ local function run_http()
       queued = (result == "queued"),
       table = table_snapshot(c),
     }
+  end)
+
+  srv:route("POST", "/v1/tables/:id/bot/start", function(req, params, c)
+    if params.table_id ~= c.tbl.id then
+      return { "404 Not Found", api.error_body("not_found", "unknown table") }
+    end
+    if type(req.json) ~= "table" then
+      return {
+        "400 Bad Request",
+        api.error_body("bad_request", "JSON body required with player_id, chips, and code (file contents)."),
+      }
+    end
+    local j = req.json
+    local player_id = j.player_id
+    local chips = tonumber(j.chips or 500) or 500
+    local code = j.code
+    local filename = j.filename or "bot.py"
+    if not player_id or player_id == "" then
+      return {
+        "400 Bad Request",
+        api.error_body("invalid_player", "player_id is required."),
+      }
+    end
+    if not code or code == "" then
+      return {
+        "400 Bad Request",
+        api.error_body("bad_request", "code (bot file contents) is required."),
+      }
+    end
+    player_id = tostring(player_id)
+
+    if c.running_bots[player_id] then
+      kill_bot(c.running_bots[player_id].pid)
+      c.running_bots[player_id] = nil
+    end
+
+    local lang = detect_lang(filename, code)
+
+    local tmpdir = root .. "/tmp_bots"
+    os.execute("mkdir -p " .. tmpdir)
+    local safe_name = player_id:gsub("[^%w_%-]", "_")
+    local ext = lang == "lua" and ".lua" or ".py"
+    local bot_path = tmpdir .. "/" .. safe_name .. ext
+    local f = io.open(bot_path, "w")
+    if not f then
+      return {
+        "500 Internal Server Error",
+        api.error_body("internal", "Failed to save bot file."),
+      }
+    end
+    f:write(code)
+    f:close()
+
+    local port = tonumber(os.getenv("POKER_PORT") or "8080") or 8080
+    local pid = spawn_bot(root, lang, bot_path, player_id, c.tbl.id, port)
+    if not pid then
+      return {
+        "500 Internal Server Error",
+        api.error_body("internal", "Failed to spawn bot process."),
+      }
+    end
+
+    c.running_bots[player_id] = { pid = pid, file = bot_path, lang = lang }
+    return {
+      ok = true,
+      player_id = player_id,
+      lang = lang,
+      pid = pid,
+    }
+  end)
+
+  srv:route("POST", "/v1/tables/:id/bot/stop", function(req, params, c)
+    if params.table_id ~= c.tbl.id then
+      return { "404 Not Found", api.error_body("not_found", "unknown table") }
+    end
+    if type(req.json) ~= "table" then
+      return {
+        "400 Bad Request",
+        api.error_body("bad_request", "JSON body required with player_id."),
+      }
+    end
+    local player_id = tostring(req.json.player_id or "")
+    if player_id == "" then
+      return {
+        "400 Bad Request",
+        api.error_body("invalid_player", "player_id is required."),
+      }
+    end
+    local bot = c.running_bots[player_id]
+    if not bot then
+      return {
+        "404 Not Found",
+        api.error_body("not_found", "No running bot for this player."),
+      }
+    end
+    kill_bot(bot.pid)
+    c.running_bots[player_id] = nil
+    return { ok = true, player_id = player_id, stopped = true }
+  end)
+
+  srv:route("GET", "/v1/tables/:id/bot/list", function(_, params, c)
+    if params.table_id ~= c.tbl.id then
+      return { "404 Not Found", api.error_body("not_found", "unknown table") }
+    end
+    local bots = {}
+    for pid_name, info in pairs(c.running_bots) do
+      bots[#bots + 1] = {
+        player_id = pid_name,
+        lang = info.lang,
+        pid = info.pid,
+      }
+    end
+    return { ok = true, bots = bots }
   end)
 
   srv:run_loop()

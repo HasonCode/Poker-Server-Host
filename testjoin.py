@@ -73,6 +73,13 @@ def show_table(state: dict, player: str = "") -> None:
         if cards:
             print(f"  Your hand: {' '.join(cards)}")
 
+    winners = hand.get("last_winners")
+    if winners and isinstance(winners, list):
+        for w in winners:
+            hname = w.get("hand_name", "")
+            hname_str = f" ({hname})" if hname and hname != "fold" else ""
+            print(f"  ** {w.get('player_id','?')} won {w.get('amount',0)} chips{hname_str} **")
+
     print("-" * 52)
     for i in range(1, max_s + 1):
         seat = seats[i - 1] if i <= len(seats) else False

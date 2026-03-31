@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Poker table</title>
+  <title>Poker Table</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -12,83 +12,137 @@
       <div class="brand">
         <span class="logo" aria-hidden="true">♠</span>
         <div>
-          <h1>Poker server</h1>
-          <p class="sub">Live table state</p>
+          <h1>Poker Server</h1>
+          <p class="sub" id="connState">Connecting…</p>
         </div>
       </div>
       <div class="toolbar">
-        <label class="field">
-          <span>Table ID</span>
+        <label class="field"><span>Table</span>
           <input type="text" id="tableId" value="demo" autocomplete="off" />
         </label>
-        <label class="check">
-          <input type="checkbox" id="poll" checked />
-          <span>Auto-refresh (2s)</span>
-        </label>
-        <button type="button" id="refresh" class="btn">Refresh</button>
+        <button type="button" id="refresh" class="btn btn-sm">↻ Refresh</button>
       </div>
     </header>
 
-    <section class="status-bar" id="statusBar" role="status">
-      <span id="connState" class="pill pill-warn">Connecting…</span>
-      <span id="lastFetch" class="muted"></span>
+    <!-- join gate (shown when not seated) -->
+    <section class="panel join-panel" id="joinPanel">
+      <h2>Take a seat</h2>
+      <form id="joinForm" autocomplete="off">
+        <label class="field"><span>Name</span>
+          <input type="text" id="joinName" value="" placeholder="Your name" required />
+        </label>
+        <label class="field"><span>Chips</span>
+          <input type="number" id="joinChips" value="500" min="1" required />
+        </label>
+        <button type="submit" class="btn btn-accent">Join table</button>
+      </form>
+      <p class="err" id="joinErr"></p>
     </section>
 
-    <main class="grid">
-      <section class="panel table-panel" aria-labelledby="seats-h">
-        <h2 id="seats-h">Seats</h2>
-        <p class="hint">Up to 10 seats · stacks persist between hands</p>
+    <!-- main game area (shown when seated) -->
+    <div class="game-area hidden" id="gameArea">
+
+      <!-- your hand -->
+      <section class="panel your-panel">
+        <div class="your-header">
+          <div>
+            <h2 id="yourName">—</h2>
+            <span class="sub" id="yourMeta">—</span>
+          </div>
+          <button type="button" id="leaveBtn" class="btn btn-danger btn-sm">Leave table</button>
+        </div>
+        <div class="your-cards" id="yourCards"></div>
+      </section>
+
+      <!-- table overview -->
+      <section class="panel table-panel">
+        <div class="hand-bar">
+          <span class="pill" id="statusPill">idle</span>
+          <span class="stat-inline"><b>Street</b> <span id="streetVal">—</span></span>
+          <span class="stat-inline highlight"><b>Pot</b> <span id="potVal" class="mono">0</span></span>
+          <span class="stat-inline"><b>Bet</b> <span id="betVal" class="mono">0</span></span>
+          <span class="stat-inline"><b>Min raise</b> <span id="minRaiseVal" class="mono">—</span></span>
+        </div>
+        <div class="board-label">Community</div>
+        <div class="board" id="community"></div>
         <div class="seats" id="seats"></div>
+        <div class="winners hidden" id="winners"></div>
       </section>
 
-      <section class="panel hand-panel" aria-labelledby="hand-h">
-        <h2 id="hand-h">Current hand</h2>
-        <div class="hand-meta">
-          <div class="stat">
-            <span class="label">Status</span>
-            <span id="handStatus" class="value">—</span>
-          </div>
-          <div class="stat">
-            <span class="label">Street</span>
-            <span id="handStreet" class="value">—</span>
-          </div>
-          <div class="stat highlight">
-            <span class="label">Pot</span>
-            <span id="handPot" class="value mono">0</span>
-          </div>
+      <!-- actions -->
+      <section class="panel action-panel" id="actionPanel">
+        <h2>Actions</h2>
+        <div class="turn-badge hidden" id="turnBadge">Your turn!</div>
+        <div class="action-btns" id="actionBtns">
+          <button type="button" class="btn" data-act="fold">Fold</button>
+          <button type="button" class="btn" data-act="check">Check</button>
+          <button type="button" class="btn" data-act="call">Call</button>
+          <button type="button" class="btn btn-accent" data-act="raise" id="raiseBtn">Raise</button>
+          <button type="button" class="btn btn-warn" data-act="all_in">All-in</button>
         </div>
-        <div class="hand-meta positions">
-          <div class="stat">
-            <span class="label">Button</span>
-            <span id="handBtn" class="value mono">—</span>
-          </div>
-          <div class="stat">
-            <span class="label">SB / BB</span>
-            <span id="handBlinds" class="value mono">—</span>
-          </div>
-          <div class="stat">
-            <span class="label">To act</span>
-            <span id="handAct" class="value mono">—</span>
-          </div>
-          <div class="stat">
-            <span class="label">Min raise</span>
-            <span id="handMinRaise" class="value mono">—</span>
-          </div>
+        <div class="raise-row">
+          <label class="field"><span>Raise to (total street)</span>
+            <input type="number" id="raiseAmt" min="1" value="10" />
+          </label>
         </div>
-        <div class="board-wrap">
-          <span class="label">Community</span>
-          <div class="board" id="community"></div>
-        </div>
-        <div class="log-wrap">
-          <span class="label">Action log</span>
-          <ol class="log" id="actionLog"></ol>
-        </div>
+        <p class="err" id="actErr"></p>
       </section>
-    </main>
 
-    <footer class="foot">
-      <code id="endpoint"></code>
-    </footer>
+      <!-- bot -->
+      <section class="panel bot-panel">
+        <h2>Bot mode</h2>
+        <p class="sub">Upload a <code>.py</code> or <code>.lua</code> bot file containing a
+          <code>decide(state, me)</code> function. The server runs it as a background process.</p>
+        <div class="bot-upload-row">
+          <label class="field"><span>Bot name</span>
+            <input type="text" id="botName" value="" placeholder="MyBot" />
+          </label>
+          <label class="field"><span>Chips</span>
+            <input type="number" id="botChips" value="500" min="1" />
+          </label>
+          <label class="field file-field"><span>Bot file (.py / .lua)</span>
+            <input type="file" id="botFile" accept=".py,.lua" />
+          </label>
+        </div>
+        <div class="bot-bar">
+          <button type="button" id="botUploadStart" class="btn btn-accent btn-sm">Upload &amp; Start</button>
+          <button type="button" id="botUploadStop" class="btn btn-danger btn-sm" disabled>Stop bot</button>
+          <span class="sub" id="botStatus"></span>
+        </div>
+        <div class="bot-running-list" id="botRunningList"></div>
+        <details class="bot-help">
+          <summary class="sub">How to write a bot</summary>
+          <pre class="code-sample"><code># Python — bots/my_bot.py
+def decide(state, me):
+    hand = state["hand"]
+    cb = hand["current_bet"]
+    mri = hand["min_raise_increment"]
+    if cb + mri &lt;= me["stack"]:
+        return {"action": "raise", "amount": cb + mri}
+    return {"action": "call"}</code></pre>
+          <pre class="code-sample"><code>-- Lua — bots/my_bot.lua
+local bot_runner = require("poker.bot_runner")
+local function decide(state, me)
+  local cb = (state.hand or {}).current_bet or 0
+  local mri = (state.hand or {}).min_raise_increment or 5
+  if cb + mri &lt;= me.stack then
+    return { action = "raise", amount = cb + mri }
+  end
+  return { action = "call" }
+end
+bot_runner.run({ strategy = decide, player_id = "LuaBot" })</code></pre>
+          <p class="sub">See <code>bots/example_bot.py</code> and <code>bots/example_bot.lua</code> for full templates.</p>
+        </details>
+      </section>
+
+      <!-- log -->
+      <section class="panel log-panel">
+        <h2>Action log</h2>
+        <ol class="log" id="actionLog"></ol>
+      </section>
+    </div>
+
+    <footer class="foot"><code id="endpoint"></code></footer>
   </div>
   <script src="/app.js" defer></script>
 </body>
