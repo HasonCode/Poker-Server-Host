@@ -18,6 +18,7 @@ Uses only the standard library (urllib). Typical usage::
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -180,6 +181,65 @@ class PokerClient:
             self._path_table(table_id, "join"),
             body,
         )
+
+    def leave_table(self, table_id: str, *, player_id: str) -> Any:
+        """Leave the table (removes the player from their seat)."""
+        return self._request_json(
+            "POST",
+            self._path_table(table_id, "leave"),
+            {"player_id": player_id},
+        )
+
+    def is_my_turn(self, table_id: str, player_id: str) -> bool:
+        """Return True if it is currently *player_id*'s turn to act."""
+        state = self.get_table_state(table_id)
+        hand = state.get("hand") or {}
+        if hand.get("status") != "active":
+            return False
+        ats = hand.get("action_to_seat")
+        if ats is None:
+            return False
+        seats = state.get("seats") or []
+        if not isinstance(ats, int) or ats < 1 or ats > len(seats):
+            return False
+        seat_info = seats[ats - 1]
+        if not isinstance(seat_info, dict):
+            return False
+        return seat_info.get("player_id") == player_id
+
+    def wait_for_turn(
+        self,
+        table_id: str,
+        player_id: str,
+        *,
+        poll_interval: float = 0.5,
+        timeout: Optional[float] = None,
+    ) -> Any:
+        """
+        Block until it is *player_id*'s turn, then return the table state.
+
+        Polls ``GET .../state`` every *poll_interval* seconds.
+        If *timeout* is set and exceeded, raises ``TimeoutError``.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            state = self.get_table_state(table_id)
+            hand = state.get("hand") or {}
+            if hand.get("status") == "active":
+                ats = hand.get("action_to_seat")
+                seats = state.get("seats") or []
+                if (
+                    isinstance(ats, int)
+                    and 1 <= ats <= len(seats)
+                    and isinstance(seats[ats - 1], dict)
+                    and seats[ats - 1].get("player_id") == player_id
+                ):
+                    return state
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for {player_id}'s turn after {timeout}s"
+                )
+            time.sleep(poll_interval)
 
     def send_action(
         self,

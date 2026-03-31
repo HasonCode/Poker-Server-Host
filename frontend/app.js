@@ -22,6 +22,44 @@
 
   let pollTimer = null;
 
+  function parseCard(str) {
+    if (!str || str === "?") return null;
+    var suit = str.slice(-1);
+    var rank = str.slice(0, -1);
+    return { rank: rank, suit: suit };
+  }
+
+  function isRed(suit) {
+    return suit === "♥" || suit === "♦";
+  }
+
+  function makeCardEl(str, cls) {
+    var el = document.createElement("span");
+    var parsed = parseCard(str);
+    if (!parsed) {
+      el.className = "card placeholder" + (cls ? " " + cls : "");
+      el.textContent = "—";
+      return el;
+    }
+    el.className = "card" + (isRed(parsed.suit) ? " red" : "") + (cls ? " " + cls : "");
+    var r = document.createElement("span");
+    r.className = "card-rank";
+    r.textContent = parsed.rank;
+    var s = document.createElement("span");
+    s.className = "card-suit";
+    s.textContent = parsed.suit;
+    el.appendChild(r);
+    el.appendChild(s);
+    return el;
+  }
+
+  function makeFacedownEl(cls) {
+    var el = document.createElement("span");
+    el.className = "card facedown" + (cls ? " " + cls : "");
+    el.textContent = "🂠";
+    return el;
+  }
+
   const urlParams = new URLSearchParams(location.search);
   const tableFromUrl = urlParams.get("table");
   if (tableFromUrl) {
@@ -46,6 +84,8 @@
   function renderSeats(data) {
     const max = data.max_seats || 10;
     const seats = data.seats || [];
+    const hand = data.hand || {};
+    const holeCards = hand.hole_cards || {};
     const frag = document.createDocumentFragment();
     for (let i = 1; i <= max; i++) {
       const s = seats[i];
@@ -64,6 +104,22 @@
         stack.className = "seat-stack";
         stack.textContent = String(s.stack) + " chips";
         div.appendChild(stack);
+
+        const cards = holeCards[String(i)];
+        if (cards && cards.length > 0) {
+          const hcDiv = document.createElement("div");
+          hcDiv.className = "hole-cards";
+          cards.forEach(function (c) {
+            hcDiv.appendChild(makeCardEl(c));
+          });
+          div.appendChild(hcDiv);
+        } else if (hand.status === "active" && !hand.folded[String(i)]) {
+          const hcDiv = document.createElement("div");
+          hcDiv.className = "hole-cards";
+          hcDiv.appendChild(makeFacedownEl());
+          hcDiv.appendChild(makeFacedownEl());
+          div.appendChild(hcDiv);
+        }
       } else {
         const empty = document.createElement("div");
         empty.className = "seat-name";
@@ -115,10 +171,7 @@
       communityEl.appendChild(ph);
     } else {
       comm.forEach(function (c) {
-        const el = document.createElement("span");
-        el.className = "card";
-        el.textContent = String(c);
-        communityEl.appendChild(el);
+        communityEl.appendChild(makeCardEl(String(c)));
       });
     }
 

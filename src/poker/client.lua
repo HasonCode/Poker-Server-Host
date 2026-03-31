@@ -144,6 +144,64 @@ function M:join_table(table_id, args)
   return self:_request("POST", path_table(table_id, "join"), body)
 end
 
+function M:leave_table(table_id, player_id)
+  return self:_request("POST", path_table(table_id, "leave"), {
+    player_id = player_id,
+  })
+end
+
+--- True if it is player_id's turn right now.
+function M:is_my_turn(table_id, player_id)
+  local data, err = self:get_table_state(table_id)
+  if not data then
+    return false, err
+  end
+  local hand = data.hand
+  if not hand or hand.status ~= "active" then
+    return false
+  end
+  local ats = hand.action_to_seat
+  if not ats then
+    return false
+  end
+  local seats = data.seats or {}
+  local seat_info = seats[ats]
+  if type(seat_info) ~= "table" then
+    return false
+  end
+  return seat_info.player_id == player_id
+end
+
+--- Block until it is player_id's turn; returns state snapshot.
+--- @param opts { poll_interval?: number, timeout?: number }
+function M:wait_for_turn(table_id, player_id, opts)
+  opts = opts or {}
+  local interval = opts.poll_interval or 0.5
+  local deadline = opts.timeout and (os.clock() + opts.timeout) or nil
+  local socket_ok, socket = pcall(require, "socket")
+  local sleep = socket_ok and socket.sleep or function(s)
+    os.execute("sleep " .. tostring(s))
+  end
+  while true do
+    local data, err = self:get_table_state(table_id)
+    if data then
+      local hand = data.hand
+      if hand and hand.status == "active" then
+        local ats = hand.action_to_seat
+        local seats = data.seats or {}
+        local info = ats and seats[ats]
+        if type(info) == "table" and info.player_id == player_id then
+          return data
+        end
+      end
+    end
+    if deadline and os.clock() >= deadline then
+      return nil, { kind = M.ERR_TRANSPORT, message = "timed out waiting for turn" }
+    end
+    sleep(interval)
+  end
+end
+
 --- @param args { player_id: string, action: string, amount?: number, queue?: boolean }
 function M:send_action(table_id, args)
   local body = {

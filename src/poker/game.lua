@@ -1,5 +1,7 @@
 -- Hand state: SB/BB, button, turn order, betting rounds, min-raise, cannot re-raise self.
 
+local deck_mod = require("poker.deck")
+
 local HandState = {}
 HandState.__index = HandState
 
@@ -7,6 +9,14 @@ local function copy_keys(t)
   local out = {}
   for k, v in pairs(t or {}) do
     out[k] = v
+  end
+  return out
+end
+
+local function seat_map_to_json(t)
+  local out = {}
+  for k, v in pairs(t or {}) do
+    out[tostring(k)] = v
   end
   return out
 end
@@ -35,6 +45,8 @@ function HandState.new(opts)
     pending = {},
     last_raise_seat = nil,
     occupied_ring = {},
+    deck = {},
+    hole_cards = {},
   }, HandState)
 end
 
@@ -43,13 +55,29 @@ function HandState:snapshot_public()
   if self.status == "idle" then
     min_inc = self.bb_amount
   end
+  local comm = {}
+  for _, c in ipairs(self.community) do
+    if type(c) == "table" then
+      comm[#comm + 1] = deck_mod.card_str(c)
+    else
+      comm[#comm + 1] = tostring(c)
+    end
+  end
+  local hc = {}
+  for seat, cards in pairs(self.hole_cards) do
+    local arr = {}
+    for _, c in ipairs(cards) do
+      arr[#arr + 1] = deck_mod.card_str(c)
+    end
+    hc[tostring(seat)] = arr
+  end
   return {
     status = self.status,
     street = self.street,
     pot = self.pot,
-    community = self.community,
+    community = comm,
     action_log = self.action_log,
-    hand_bets = self.hand_bets,
+    hand_bets = seat_map_to_json(self.hand_bets),
     sb_amount = self.sb_amount,
     bb_amount = self.bb_amount,
     button_seat = self.button_seat,
@@ -58,8 +86,9 @@ function HandState:snapshot_public()
     action_to_seat = self.action_to_seat,
     current_bet = self.current_bet,
     min_raise_increment = min_inc,
-    contribution = copy_keys(self.contribution),
-    folded = copy_keys(self.folded),
+    contribution = seat_map_to_json(self.contribution),
+    folded = seat_map_to_json(self.folded),
+    hole_cards = hc,
   }
 end
 
@@ -185,6 +214,8 @@ function HandState:_reset_between_hands()
   self.sb_seat = nil
   self.bb_seat = nil
   self.hand_bets = {}
+  self.deck = {}
+  self.hole_cards = {}
 end
 
 function HandState:_advance_street_or_complete(tbl)
@@ -198,13 +229,19 @@ function HandState:_advance_street_or_complete(tbl)
 
   if self.street == "preflop" then
     self.street = "flop"
-    self.community = { "?", "?", "?" }
+    deck_mod.draw(self.deck, 1) -- burn
+    local flop = deck_mod.draw(self.deck, 3)
+    self.community = flop
   elseif self.street == "flop" then
     self.street = "turn"
-    self.community[4] = "?"
+    deck_mod.draw(self.deck, 1) -- burn
+    local turn = deck_mod.draw(self.deck, 1)
+    self.community[4] = turn[1]
   elseif self.street == "turn" then
     self.street = "river"
-    self.community[5] = "?"
+    deck_mod.draw(self.deck, 1) -- burn
+    local river = deck_mod.draw(self.deck, 1)
+    self.community[5] = river[1]
   elseif self.street == "river" then
     self.action_to_seat = nil
     local n = math.max(1, #self.occupied_ring)
@@ -309,8 +346,14 @@ function HandState:start_hand(tbl)
 
   self.current_bet = self.bb_amount
   self.min_raise_increment = self.bb_amount
-  self.last_raise_seat = nil -- voluntary raises only; BB post is not a "raise" for re-raise rules
+  self.last_raise_seat = nil
   self.pending = {}
+
+  self.deck = deck_mod.shuffle(deck_mod.new_deck())
+  self.hole_cards = {}
+  for _, s in ipairs(occ) do
+    self.hole_cards[s] = deck_mod.draw(self.deck, 2)
+  end
 
   if n == 2 then
     self.action_to_seat = sb

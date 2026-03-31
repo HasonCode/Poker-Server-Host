@@ -62,11 +62,10 @@ local function demo_context()
   local new_table = poker.new_table
   local game = poker.game
   local tbl = new_table({ id = "demo", max_seats = 10 })
-  tbl:seat_player({ seat = 1, player_id = "alice", chips = 1000 })
   local ai_players = {}
-  for i = 1, 5 do
+  for i = 1, 6 do
     local id = "ai_" .. i
-    tbl:seat_player({ seat = i + 1, player_id = id, chips = 1000 })
+    tbl:seat_player({ seat = i, player_id = id, chips = 1000 })
     ai_players[id] = true
   end
   local hand = game.HandState.new({})
@@ -272,6 +271,48 @@ local function run_http()
     })
     if not ok then
       return join_http_error(err)
+    end
+    return {
+      ok = true,
+      table = table_snapshot(c),
+    }
+  end)
+
+  srv:route("POST", "/v1/tables/:id/leave", function(req, params, c)
+    if params.table_id ~= c.tbl.id then
+      return { "404 Not Found", api.error_body("not_found", "unknown table") }
+    end
+    if type(req.json) ~= "table" then
+      return {
+        "400 Bad Request",
+        api.error_body("bad_request", "JSON body required with player_id."),
+      }
+    end
+    local player_id = req.json.player_id
+    if not player_id or player_id == "" then
+      return {
+        "400 Bad Request",
+        api.error_body("invalid_player", "player_id is required and non-empty."),
+      }
+    end
+    player_id = tostring(player_id)
+    local seat = c.tbl:seat_for_player(player_id)
+    if not seat then
+      return {
+        "404 Not Found",
+        api.error_body("not_seated", "Player is not seated at this table."),
+      }
+    end
+    if c.hand.status == "active" and c.hand.folded and not c.hand.folded[seat] then
+      c.hand.folded[seat] = true
+      c.hand.pending[seat] = nil
+      if c.hand.action_to_seat == seat then
+        c.hand:_after_action(c.tbl, seat)
+      end
+    end
+    c.tbl:leave_seat(seat)
+    if c.action_queue then
+      c.action_queue[player_id] = nil
     end
     return {
       ok = true,

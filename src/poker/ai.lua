@@ -1,6 +1,8 @@
--- Demo bots: when it is their turn, raise by the minimum legal amount when possible.
+-- Demo bots: raise to a fixed target (10 chips) once per street, then call.
 
 local M = {}
+
+local AI_BET_TARGET = 10
 
 local function choose(tbl, hand, seat)
   local st = tbl:get_seat(seat)
@@ -14,14 +16,17 @@ local function choose(tbl, hand, seat)
   if need < 0 then
     need = 0
   end
-  local target = cb + mri
 
   if need > st.stack then
     return "all_in", nil
   end
 
-  if c + st.stack >= target then
-    return "raise", target
+  if cb < AI_BET_TARGET then
+    local target = math.max(cb + mri, AI_BET_TARGET)
+    local chips_in = target - c
+    if chips_in > 0 and chips_in <= st.stack then
+      return "raise", target
+    end
   end
 
   if need > 0 and need <= st.stack then
@@ -29,9 +34,6 @@ local function choose(tbl, hand, seat)
   end
 
   if c >= cb then
-    if st.stack > 0 then
-      return "all_in", nil
-    end
     return "check", nil
   end
 
@@ -45,6 +47,29 @@ function M.run_until_human(ctx)
   local ai_players = ctx.ai_players or {}
   local queue = ctx.action_queue
   local max_steps = 500
+
+  if hand.status == "idle" then
+    local first, perr = hand:peek_first_actor(tbl)
+    if not first then
+      return
+    end
+    local frow = tbl:get_seat(first)
+    if not frow then
+      return
+    end
+    local fpid = frow.player_id
+    local has_queued = type(queue) == "table"
+      and type(queue[fpid]) == "table"
+      and queue[fpid].action ~= nil
+    if not ai_players[fpid] and not has_queued then
+      return
+    end
+    local ok, serr = hand:start_hand(tbl)
+    if not ok then
+      io.stderr:write("[poker-server] auto-start failed: " .. tostring(serr) .. "\n")
+      return
+    end
+  end
 
   for _ = 1, max_steps do
     if hand.status ~= "active" or not hand.action_to_seat then
