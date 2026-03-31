@@ -53,17 +53,6 @@ function M.run_until_human(ctx)
     if not first then
       return
     end
-    local frow = tbl:get_seat(first)
-    if not frow then
-      return
-    end
-    local fpid = frow.player_id
-    local has_queued = type(queue) == "table"
-      and type(queue[fpid]) == "table"
-      and queue[fpid].action ~= nil
-    if not ai_players[fpid] and not has_queued then
-      return
-    end
     local ok, serr = hand:start_hand(tbl)
     if not ok then
       io.stderr:write("[poker-server] auto-start failed: " .. tostring(serr) .. "\n")
