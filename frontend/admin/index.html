@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poker Admin</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">&#9824;</span>
+        <div>
+          <h1>Poker Admin</h1>
+          <p class="sub" id="adminEmail">Not logged in</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button type="button" id="refreshBtn" class="btn btn-sm">&#8635; Refresh</button>
+        <button type="button" id="logoutBtn" class="btn btn-danger btn-sm hidden">Logout</button>
+      </div>
+    </header>
+
+    <!-- Login -->
+    <section class="panel login-panel" id="loginPanel">
+      <h2>Admin Login Required</h2>
+      <p class="sub">Sign in with the authorized Google account to access the admin panel.</p>
+      <a href="/admin/oauth/login" class="btn btn-accent google-btn">Sign in with Google</a>
+      <p class="err" id="loginErr"></p>
+    </section>
+
+    <!-- Dashboard (hidden until logged in) -->
+    <div class="dashboard hidden" id="dashboard">
+
+      <!-- Tables list -->
+      <section class="panel">
+        <h2>Tables</h2>
+        <div id="tablesList"></div>
+        <details class="create-table-details">
+          <summary class="sub">Create new table</summary>
+          <form id="createTableForm" autocomplete="off" class="create-table-form">
+            <label class="field"><span>Table ID</span>
+              <input type="text" id="newTableId" placeholder="high_stakes" required />
+            </label>
+            <label class="field"><span>Max Seats</span>
+              <input type="number" id="newMaxSeats" value="10" min="2" max="10" />
+            </label>
+            <label class="field"><span>SB</span>
+              <input type="number" id="newSB" value="2" min="1" />
+            </label>
+            <label class="field"><span>BB</span>
+              <input type="number" id="newBB" value="5" min="1" />
+            </label>
+            <label class="field"><span>Zero chips</span>
+              <select id="newZeroChips">
+                <option value="rebuy" selected>Rebuy</option>
+                <option value="eject">Eject</option>
+              </select>
+            </label>
+            <label class="field"><span>Rebuy amt</span>
+              <input type="number" id="newRebuyAmt" value="500" min="1" />
+            </label>
+            <label class="field cb-field">
+              <input type="checkbox" id="newWithAIs" /> <span>Add AI players</span>
+            </label>
+            <button type="submit" class="btn btn-accent btn-sm">Create</button>
+          </form>
+          <p class="err" id="createErr"></p>
+        </details>
+      </section>
+
+      <!-- Selected table management -->
+      <section class="panel" id="tablePanel">
+        <div class="table-header">
+          <h2>Table: <span id="selectedTableName">—</span></h2>
+          <button type="button" id="deleteTableBtn" class="btn btn-danger btn-sm">Delete Table</button>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid" id="statsGrid">
+          <div class="stat-card">
+            <div class="stat-label">Seats</div>
+            <div class="stat-val"><span id="statSeated">0</span> / <span id="statMaxSeats">10</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Chips</div>
+            <div class="stat-val mono" id="statChips">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Hand</div>
+            <div class="stat-val" id="statHand">idle</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Street</div>
+            <div class="stat-val" id="statStreet">---</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Pot</div>
+            <div class="stat-val mono" id="statPot">0</div>
+          </div>
+        </div>
+
+        <!-- Players -->
+        <h3>Seated Players</h3>
+        <table class="data-table" id="playersTable">
+          <thead>
+            <tr>
+              <th>Seat</th>
+              <th>Player</th>
+              <th>Stack</th>
+              <th>AI</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="playersTbody"></tbody>
+        </table>
+        <p class="sub" id="noPlayers">No players seated.</p>
+
+        <!-- Settings -->
+        <h3>Game Settings</h3>
+        <form id="settingsForm" autocomplete="off" class="settings-form">
+          <label class="field"><span>Small Blind</span>
+            <input type="number" id="setSB" min="1" value="2" />
+          </label>
+          <label class="field"><span>Big Blind</span>
+            <input type="number" id="setBB" min="1" value="5" />
+          </label>
+          <label class="field"><span>Zero chips</span>
+            <select id="setZeroChips">
+              <option value="rebuy">Rebuy</option>
+              <option value="eject">Eject</option>
+            </select>
+          </label>
+          <label class="field"><span>Rebuy amt</span>
+            <input type="number" id="setRebuyAmt" min="1" value="500" />
+          </label>
+          <button type="submit" class="btn btn-accent btn-sm">Update Settings</button>
+        </form>
+        <div class="reset-row">
+          <label class="field"><span>Reset chips to</span>
+            <input type="number" id="resetChips" min="1" value="1000" />
+          </label>
+          <button type="button" id="resetBtn" class="btn btn-danger btn-sm">Reset Table</button>
+        </div>
+        <p class="err" id="settingsErr"></p>
+
+        <!-- Bots -->
+        <h3>Running Bots</h3>
+        <div id="botList"></div>
+        <p class="sub" id="noBots">No bots running.</p>
+        <details class="bot-upload-details">
+          <summary class="sub">Upload a bot</summary>
+          <div class="bot-upload-row">
+            <label class="field"><span>Bot name</span>
+              <input type="text" id="adminBotName" placeholder="AdminBot" />
+            </label>
+            <label class="field"><span>Chips</span>
+              <input type="number" id="adminBotChips" value="500" min="1" />
+            </label>
+            <label class="field file-field"><span>Bot file (.py / .lua)</span>
+              <input type="file" id="adminBotFile" accept=".py,.lua" />
+            </label>
+          </div>
+          <button type="button" id="adminBotStart" class="btn btn-accent btn-sm">Upload &amp; Start</button>
+          <p class="err" id="botErr"></p>
+        </details>
+      </section>
+
+    </div>
+  </div>
+  <script src="/admin/admin.js" defer></script>
+</body>
+</html>

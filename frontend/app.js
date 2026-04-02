@@ -29,7 +29,8 @@
   const betVal         = $("#betVal");
   const minRaiseVal    = $("#minRaiseVal");
   const communityEl    = $("#community");
-  const seatsEl        = $("#seats");
+  const feltWrap       = $("#feltWrap");
+  const feltPotVal     = $("#feltPotVal");
 
   const actionPanel    = $("#actionPanel");
   const turnBadge      = $("#turnBadge");
@@ -50,6 +51,7 @@
   /* ── state ────────────────────────────────────────── */
 
   let playerId = null;
+  let playerToken = null;
   let mySeat   = null;
   let lastData = null;
   let pollTimer = null;
@@ -69,6 +71,9 @@
 
   async function apiFetch(method, path, body) {
     const opts = { method, headers: { "Accept": "application/json" } };
+    if (playerToken) {
+      opts.headers["X-Player-Token"] = playerToken;
+    }
     if (body !== undefined) {
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
@@ -180,6 +185,7 @@
     statusPill.className = "pill " + (hand.status === "active" ? "active" : "idle");
     streetVal.textContent = hand.street || "—";
     potVal.textContent = hand.pot != null ? hand.pot : 0;
+    feltPotVal.textContent = hand.pot != null ? hand.pot : 0;
     betVal.textContent = hand.current_bet != null ? hand.current_bet : 0;
     minRaiseVal.textContent = hand.min_raise_increment != null ? hand.min_raise_increment : "—";
 
@@ -240,82 +246,99 @@
     return 0;
   }
 
+  const BET_POS = {
+    1:  { x: 41, y: 72 },
+    2:  { x: 27, y: 65 },
+    3:  { x: 20, y: 46 },
+    4:  { x: 26, y: 25 },
+    5:  { x: 39, y: 20 },
+    6:  { x: 52, y: 20 },
+    7:  { x: 70, y: 25 },
+    8:  { x: 77, y: 46 },
+    9:  { x: 70, y: 65 },
+    10: { x: 55, y: 72 },
+  };
+
   function renderSeats(data) {
     const max = data.max_seats || 10;
     const seats = data.seats || [];
     const hand = data.hand || {};
     const holeCards = hand.hole_cards || {};
     const folded = hand.folded || {};
-    const frag = document.createDocumentFragment();
 
-    for (let i = 1; i <= max; i++) {
+    feltWrap.querySelectorAll(".felt-bet").forEach(el => el.remove());
+
+    for (let i = 1; i <= 10; i++) {
+      const el = feltWrap.querySelector('.felt-seat[data-seat="' + i + '"]');
+      if (!el) continue;
+
+      if (i > max) { el.classList.add("hidden"); continue; }
+      el.classList.remove("hidden");
+
       const s = seats[i - 1];
-      const div = document.createElement("div");
       const isFolded = typeof folded === "object" && !Array.isArray(folded) && folded[String(i)];
 
-      let cls = "seat";
-      if (s && s.player_id) cls += " occupied";
-      if (hand.action_to_seat === i) cls += " acting";
-      if (i === mySeat) cls += " you";
-      if (isFolded) cls += " folded";
-      div.className = cls;
+      const base = "felt-seat";
+      el.className = base
+        + (s && s.player_id ? " occupied" : "")
+        + (hand.action_to_seat === i ? " acting" : "")
+        + (i === mySeat ? " you" : "")
+        + (isFolded ? " folded" : "");
+      el.dataset.seat = i;
 
-      const num = document.createElement("div");
-      num.className = "seat-num";
-      const tags = [];
-      if (hand.button_seat === i) tags.push("BTN");
-      if (hand.sb_seat === i) tags.push("SB");
-      if (hand.bb_seat === i) tags.push("BB");
-      if (hand.action_to_seat === i) tags.push("▸ACT");
-      num.textContent = "Seat " + i + (tags.length ? " · " + tags.join(" ") : "");
-      div.appendChild(num);
+      el.replaceChildren();
 
       if (s && s.player_id) {
         const name = document.createElement("div");
-        name.className = "seat-name";
+        name.className = "fs-name";
         name.textContent = s.player_id + (i === mySeat ? " (you)" : "");
-        div.appendChild(name);
+        el.appendChild(name);
 
         const stack = document.createElement("div");
-        stack.className = "seat-stack";
-        stack.textContent = s.stack + " chips";
-        div.appendChild(stack);
+        stack.className = "fs-stack";
+        stack.textContent = s.stack;
+        el.appendChild(stack);
 
-        const contrib = getContrib(hand, i);
-        if (contrib > 0) {
-          const betEl = document.createElement("div");
-          betEl.className = "seat-bet";
-          betEl.textContent = "bet " + contrib;
-          div.appendChild(betEl);
-        }
-
-        if (isFolded) {
-          const f = document.createElement("div");
-          f.className = "seat-tags";
-          f.textContent = "FOLDED";
-          div.appendChild(f);
+        const tags = [];
+        if (hand.button_seat === i) tags.push("D");
+        if (hand.sb_seat === i) tags.push("SB");
+        if (hand.bb_seat === i) tags.push("BB");
+        if (isFolded) tags.push("FOLD");
+        if (tags.length) {
+          const t = document.createElement("div");
+          t.className = "fs-tags";
+          t.textContent = tags.join(" · ");
+          el.appendChild(t);
         }
 
         const cardsDiv = document.createElement("div");
-        cardsDiv.className = "seat-cards";
+        cardsDiv.className = "fs-cards";
         const cards = typeof holeCards === "object" && !Array.isArray(holeCards) ? holeCards[String(i)] : null;
         if (cards && cards.length) {
-          cards.forEach(c => cardsDiv.appendChild(makeCardEl(c, "sm")));
+          cards.forEach(c => cardsDiv.appendChild(makeCardEl(c, "xs")));
         } else if (hand.status === "active" && !isFolded) {
-          cardsDiv.appendChild(makeFacedownEl("sm"));
-          cardsDiv.appendChild(makeFacedownEl("sm"));
+          cardsDiv.appendChild(makeFacedownEl("xs"));
+          cardsDiv.appendChild(makeFacedownEl("xs"));
         }
-        div.appendChild(cardsDiv);
+        if (cardsDiv.children.length) el.appendChild(cardsDiv);
+
+        const contrib = getContrib(hand, i);
+        if (contrib > 0 && BET_POS[i]) {
+          const bp = BET_POS[i];
+          const bet = document.createElement("div");
+          bet.className = "felt-bet";
+          bet.style.left = bp.x + "%";
+          bet.style.top = bp.y + "%";
+          bet.textContent = contrib;
+          feltWrap.appendChild(bet);
+        }
       } else {
         const empty = document.createElement("div");
-        empty.className = "seat-name";
-        empty.style.color = "var(--muted)";
-        empty.textContent = "Empty";
-        div.appendChild(empty);
+        empty.className = "fs-name fs-empty";
+        empty.textContent = "Seat " + i;
+        el.appendChild(empty);
       }
-      frag.appendChild(div);
     }
-    seatsEl.replaceChildren(frag);
   }
 
   function renderLog(hand) {
@@ -378,6 +401,7 @@
     try {
       const data = await apiFetch("POST", apiBase() + "/join", { player_id: name, chips });
       playerId = name;
+      playerToken = data.token || null;
       renderAll(data.table || {});
       startPoll();
     } catch (err) {
@@ -391,6 +415,7 @@
       await apiFetch("POST", apiBase() + "/leave", { player_id: playerId });
     } catch { /* ignore */ }
     playerId = null;
+    playerToken = null;
     mySeat = null;
     activeBotName = null;
     botUploadStart.disabled = false;
@@ -507,11 +532,45 @@
     } catch { /* ignore */ }
   }
 
+  /* ── table selector ───────────────────────────────── */
+
+  let tableListTimer = null;
+  const TABLE_LIST_INTERVAL = 5000;
+
+  async function loadTableList() {
+    try {
+      const data = await apiFetch("GET", "/v1/tables");
+      const tables = (data.tables || []).sort((a, b) => a.table_id.localeCompare(b.table_id));
+      const prev = tableIdInput.value;
+      tableIdInput.replaceChildren();
+      tables.forEach(t => {
+        const opt = document.createElement("option");
+        opt.value = t.table_id;
+        opt.textContent = t.table_id + " (" + t.seated + "/" + t.max_seats + ")";
+        tableIdInput.appendChild(opt);
+      });
+      if (tables.find(t => t.table_id === prev)) {
+        tableIdInput.value = prev;
+      }
+    } catch { /* keep current options */ }
+  }
+
+  function startTableListPoll() {
+    if (tableListTimer) return;
+    tableListTimer = setInterval(loadTableList, TABLE_LIST_INTERVAL);
+  }
+
   /* ── init ─────────────────────────────────────────── */
 
-  refreshBtn.addEventListener("click", () => { poll(); refreshBotList(); });
-  tableIdInput.addEventListener("change", () => { if (playerId) startPoll(); else poll(); });
+  refreshBtn.addEventListener("click", () => { loadTableList(); poll(); refreshBotList(); });
+  tableIdInput.addEventListener("change", () => {
+    if (playerId) startPoll();
+    else poll();
+  });
 
-  poll();
-  refreshBotList();
+  loadTableList().then(() => {
+    poll();
+    refreshBotList();
+    startTableListPoll();
+  });
 })();

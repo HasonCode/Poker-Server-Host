@@ -99,6 +99,7 @@ class PokerClient:
     def __init__(self, base_url: str, *, timeout: float = 30.0) -> None:
         self.base_url = _normalize_base_url(base_url)
         self.timeout = timeout
+        self.token: Optional[str] = None
 
     def _path_table(self, table_id: str, suffix: str) -> str:
         tid = urllib.parse.quote(table_id, safe="")
@@ -113,6 +114,8 @@ class PokerClient:
         url = self.base_url + path
         data: Optional[bytes] = None
         headers = {"Accept": "application/json"}
+        if self.token:
+            headers["X-Player-Token"] = self.token
         if json_body is not None:
             data = json.dumps(json_body).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -176,11 +179,14 @@ class PokerClient:
         body: dict[str, Any] = {"player_id": player_id, "chips": chips}
         if seat is not None:
             body["seat"] = seat
-        return self._request_json(
+        resp = self._request_json(
             "POST",
             self._path_table(table_id, "join"),
             body,
         )
+        if isinstance(resp, dict) and resp.get("token"):
+            self.token = resp["token"]
+        return resp
 
     def leave_table(self, table_id: str, *, player_id: str) -> Any:
         """Leave the table (removes the player from their seat)."""

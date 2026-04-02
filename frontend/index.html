@@ -18,7 +18,7 @@
       </div>
       <div class="toolbar">
         <label class="field"><span>Table</span>
-          <input type="text" id="tableId" value="demo" autocomplete="off" />
+          <select id="tableId"><option value="demo">demo</option></select>
         </label>
         <button type="button" id="refresh" class="btn btn-sm">↻ Refresh</button>
       </div>
@@ -55,17 +55,32 @@
       </section>
 
       <!-- table overview -->
-      <section class="panel table-panel">
-        <div class="hand-bar">
+      <section class="table-panel">
+        <div class="hand-bar panel">
           <span class="pill" id="statusPill">idle</span>
           <span class="stat-inline"><b>Street</b> <span id="streetVal">—</span></span>
           <span class="stat-inline highlight"><b>Pot</b> <span id="potVal" class="mono">0</span></span>
           <span class="stat-inline"><b>Bet</b> <span id="betVal" class="mono">0</span></span>
           <span class="stat-inline"><b>Min raise</b> <span id="minRaiseVal" class="mono">—</span></span>
         </div>
-        <div class="board-label">Community</div>
-        <div class="board" id="community"></div>
-        <div class="seats" id="seats"></div>
+        <div class="felt-wrap" id="feltWrap">
+          <img src="/pokertable.png" class="felt-img" draggable="false" alt="Poker table" />
+          <div class="felt-pot">
+            <div class="felt-pot-label">POT</div>
+            <div class="felt-pot-val mono" id="feltPotVal">0</div>
+          </div>
+          <div class="felt-board" id="community"></div>
+          <div class="felt-seat" data-seat="1"></div>
+          <div class="felt-seat" data-seat="2"></div>
+          <div class="felt-seat" data-seat="3"></div>
+          <div class="felt-seat" data-seat="4"></div>
+          <div class="felt-seat" data-seat="5"></div>
+          <div class="felt-seat" data-seat="6"></div>
+          <div class="felt-seat" data-seat="7"></div>
+          <div class="felt-seat" data-seat="8"></div>
+          <div class="felt-seat" data-seat="9"></div>
+          <div class="felt-seat" data-seat="10"></div>
+        </div>
         <div class="winners hidden" id="winners"></div>
       </section>
 

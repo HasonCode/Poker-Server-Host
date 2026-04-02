@@ -28,6 +28,7 @@ function M.new(opts)
   return setmetatable({
     base_url = base,
     timeout = opts.timeout or 30,
+    token = nil,
     _http = http,
     _ltn12 = ltn12,
   }, M)
@@ -88,14 +89,17 @@ function M:_request(method, path, json_body)
     sink = ltn12.sink.table(chunks),
     timeout = self.timeout,
   }
+  local hdrs = {}
+  if self.token then
+    hdrs["x-player-token"] = self.token
+  end
   if json_body ~= nil then
     local payload = json.encode(json_body)
     reqt.source = ltn12.source.string(payload)
-    reqt.headers = {
-      ["content-type"] = "application/json",
-      ["content-length"] = tostring(#payload),
-    }
+    hdrs["content-type"] = "application/json"
+    hdrs["content-length"] = tostring(#payload)
   end
+  reqt.headers = hdrs
   local r, code, headers, status_line = http.request(reqt)
   local body = table.concat(chunks)
 
@@ -141,7 +145,11 @@ function M:join_table(table_id, args)
   if args.seat ~= nil then
     body.seat = args.seat
   end
-  return self:_request("POST", path_table(table_id, "join"), body)
+  local data, err = self:_request("POST", path_table(table_id, "join"), body)
+  if data and data.token then
+    self.token = data.token
+  end
+  return data, err
 end
 
 function M:leave_table(table_id, player_id)

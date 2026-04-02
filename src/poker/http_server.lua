@@ -11,6 +11,45 @@ local function parse_request_line(line)
   return method, path, ver
 end
 
+local function parse_cookies(header)
+  local cookies = {}
+  if not header or header == "" then return cookies end
+  for pair in header:gmatch("[^;]+") do
+    local k, v = pair:match("^%s*([^=]+)=(.*)%s*$")
+    if k then
+      cookies[k:match("^%s*(.-)%s*$")] = v:match("^%s*(.-)%s*$")
+    end
+  end
+  return cookies
+end
+
+local function parse_query_string(qs)
+  local params = {}
+  if not qs or qs == "" then return params end
+  for pair in qs:gmatch("[^&]+") do
+    local k, v = pair:match("^([^=]+)=?(.*)")
+    if k then
+      params[M.url_decode(k)] = M.url_decode(v or "")
+    end
+  end
+  return params
+end
+
+function M.url_decode(str)
+  str = str:gsub("+", " ")
+  str = str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+  return str
+end
+
+function M.url_encode(str)
+  str = tostring(str)
+  str = str:gsub("([^%w%-%.%_%~ ])", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end)
+  str = str:gsub(" ", "+")
+  return str
+end
+
 local function read_http_request(client)
   client:settimeout(30)
   local first, err = client:receive("*l")
@@ -33,8 +72,9 @@ local function read_http_request(client)
       headers[name:lower()] = val
     end
   end
-  local method, path = parse_request_line(first)
-  path = path and path:match("^([^?]*)") or path
+  local method, full_path = parse_request_line(first)
+  local path = full_path and full_path:match("^([^?]*)") or full_path
+  local query_string = full_path and full_path:match("%?(.*)$") or ""
   local body = ""
   local clen = tonumber(headers["content-length"] or "0") or 0
   if clen > 0 then
@@ -48,7 +88,10 @@ local function read_http_request(client)
   return {
     method = method,
     path = path,
+    query_string = query_string,
+    query = parse_query_string(query_string),
     headers = headers,
+    cookies = parse_cookies(headers["cookie"]),
     body = body,
   }
 end
@@ -91,7 +134,21 @@ local function resolve_static(root, path)
   if rel == "" then
     rel = "index.html"
   end
-  return root .. "/" .. rel
+  -- If the path ends with / (directory), try index.html inside it
+  if rel:match("/$") then
+    rel = rel .. "index.html"
+  end
+  local full = root .. "/" .. rel
+  -- If the path has no extension and is a directory, try index.html
+  if not rel:match("%.[^/]+$") then
+    local idx = full .. "/index.html"
+    local f = io.open(idx, "rb")
+    if f then
+      f:close()
+      return idx
+    end
+  end
+  return full
 end
 
 local function send_raw(client, status, content_type, body)
@@ -108,6 +165,25 @@ local function send_raw(client, status, content_type, body)
   )
   client:send(head)
   client:send(body)
+end
+
+local function send_custom(client, status, headers, body)
+  body = body or ""
+  local parts = { "HTTP/1.1 " .. status .. "\r\n" }
+  if not headers["content-length"] and not headers["Content-Length"] then
+    parts[#parts + 1] = "Content-Length: " .. #body .. "\r\n"
+  end
+  if not headers["connection"] and not headers["Connection"] then
+    parts[#parts + 1] = "Connection: close\r\n"
+  end
+  for k, v in pairs(headers) do
+    parts[#parts + 1] = k .. ": " .. v .. "\r\n"
+  end
+  parts[#parts + 1] = "\r\n"
+  client:send(table.concat(parts))
+  if #body > 0 then
+    client:send(body)
+  end
 end
 
 function M.new(opts)
@@ -194,6 +270,29 @@ function M:match_handler(method, path)
       return h, { table_id = id }
     end
   end
+
+  -- Admin routes
+  id = path:match("^/admin/api/tables/([^/]+)/kick$")
+  if id and method == "POST" then
+    local h = self.routes["POST /admin/api/tables/:id/kick"]
+    if h then return h, { table_id = id } end
+  end
+  id = path:match("^/admin/api/tables/([^/]+)/reset$")
+  if id and method == "POST" then
+    local h = self.routes["POST /admin/api/tables/:id/reset"]
+    if h then return h, { table_id = id } end
+  end
+  id = path:match("^/admin/api/tables/([^/]+)/settings$")
+  if id and method == "POST" then
+    local h = self.routes["POST /admin/api/tables/:id/settings"]
+    if h then return h, { table_id = id } end
+  end
+  id = path:match("^/admin/api/tables/([^/]+)/delete$")
+  if id and method == "POST" then
+    local h = self.routes["POST /admin/api/tables/:id/delete"]
+    if h then return h, { table_id = id } end
+  end
+
   return nil
 end
 
@@ -249,6 +348,10 @@ function M:serve_one()
       io.stderr:write("[poker-server] handler error: " .. tostring(res_or_err) .. "\n")
       status = "500 Internal Server Error"
       body = api.error_body("internal", "An unexpected error occurred.")
+    elseif type(res_or_err) == "table" and res_or_err.__raw then
+      send_custom(client, res_or_err.status or "200 OK", res_or_err.headers or {}, res_or_err.body or "")
+      client:close()
+      return true
     elseif type(res_or_err) == "table" and res_or_err[1] then
       status = res_or_err[1]
       body = res_or_err[2]
