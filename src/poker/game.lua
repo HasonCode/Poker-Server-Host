@@ -57,14 +57,21 @@ function HandState:snapshot_public()
   if self.status == "idle" then
     min_inc = self.bb_amount
   end
-  local comm = {}
-  for _, c in ipairs(self.community) do
-    if type(c) == "table" then
-      comm[#comm + 1] = deck_mod.card_str(c)
-    else
-      comm[#comm + 1] = tostring(c)
+  local function cards_to_strings(list)
+    local out = {}
+    for _, c in ipairs(list or {}) do
+      if type(c) == "table" then
+        out[#out + 1] = deck_mod.card_str(c)
+      else
+        out[#out + 1] = tostring(c)
+      end
     end
+    return out
   end
+
+  local comm = cards_to_strings(self.community)
+  local last_comm = cards_to_strings(self.last_community)
+
   local hc = {}
   for seat, cards in pairs(self.hole_cards) do
     local arr = {}
@@ -78,6 +85,7 @@ function HandState:snapshot_public()
     street = self.street,
     pot = self.pot,
     community = comm,
+    last_community = last_comm,
     action_log = self.action_log,
     hand_bets = seat_map_to_json(self.hand_bets),
     sb_amount = self.sb_amount,
@@ -200,6 +208,10 @@ function HandState:_count_active()
 end
 
 function HandState:_reset_between_hands()
+  self.last_community = {}
+  for i, c in ipairs(self.community) do
+    self.last_community[i] = c
+  end
   self.status = "idle"
   self.street = "none"
   self.pot = 0

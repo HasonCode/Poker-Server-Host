@@ -1063,6 +1063,7 @@ local function run_http()
 
   if ADMIN_EMAIL ~= "" then
     io.stderr:write(string.format("  Admin: http://127.0.0.1:%s/admin (email: %s)\n", tostring(admin_port), ADMIN_EMAIL))
+    io.stderr:write(string.format("  OAuth redirect: %s\n", ADMIN_REDIRECT_URI))
   end
 
   srv:run_loop()

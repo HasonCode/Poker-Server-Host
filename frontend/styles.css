@@ -246,12 +246,17 @@ textarea {
   position: relative;
   width: 100%;
   margin: 0 auto;
+  aspect-ratio: 16 / 9;
+  background: #0b3d1a;
+  border-radius: 120px;
+  overflow: visible;
 }
 
 .felt-img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: contain;
   user-select: none;
   pointer-events: none;
 }

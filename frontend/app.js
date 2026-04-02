@@ -189,11 +189,25 @@
     betVal.textContent = hand.current_bet != null ? hand.current_bet : 0;
     minRaiseVal.textContent = hand.min_raise_increment != null ? hand.min_raise_increment : "—";
 
-    /* community */
+    /* community — show last_community when hand is idle with recent winners */
     communityEl.replaceChildren();
-    const comm = hand.community || [];
-    if (comm.length === 0) {
+    let comm = hand.community || [];
+    if (comm.length === 0 && hand.status !== "active") {
+      const lc = hand.last_community || [];
+      if (lc.length > 0 && hand.last_winners && hand.last_winners.length > 0) {
+        comm = lc;
+      }
+    }
+    if (comm.length === 0 && hand.status === "active") {
       for (let i = 0; i < 5; i++) communityEl.appendChild(makeFacedownEl());
+    } else if (comm.length === 0) {
+      /* idle with no recent hand — show empty slots */
+      for (let i = 0; i < 5; i++) {
+        const ph = document.createElement("span");
+        ph.className = "card placeholder";
+        ph.textContent = "";
+        communityEl.appendChild(ph);
+      }
     } else {
       comm.forEach(c => communityEl.appendChild(makeCardEl(String(c))));
       for (let i = comm.length; i < 5; i++) communityEl.appendChild(makeFacedownEl());
