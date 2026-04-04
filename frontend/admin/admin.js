@@ -578,7 +578,7 @@
         spectateOpenFeedback.textContent = "Opening…";
       }
       openTableSpectate.disabled = true;
-      const path = "/?table=" + encodeURIComponent(selectedTable) + "&spectate=1";
+      const path = "/admin/spectate.html?table=" + encodeURIComponent(selectedTable);
       const fullUrl = location.origin + path;
       /* Two-arg window.open avoids popup blockers treating this as a chrome-less popup. */
       const w = window.open(path, "_blank");
@@ -602,7 +602,7 @@
       }
       if (spectateOpenFeedback) {
         spectateOpenFeedback.textContent =
-          "Spectate tab opened. If it shows a login error, use this same browser to sign in at /admin, then reload the tab.";
+          "Spectate tab opened. If it fails, sign in at /admin in this browser, then reload.";
       }
       window.setTimeout(() => {
         if (spectateOpenFeedback) {

@@ -17,6 +17,7 @@
         </div>
       </div>
       <div class="toolbar">
+        <a href="/admin/spectate.html" class="btn btn-sm btn-accent">Table spectate</a>
         <button type="button" id="refreshBtn" class="btn btn-sm">&#8635; Refresh</button>
         <button type="button" id="logoutBtn" class="btn btn-danger btn-sm hidden">Logout</button>
       </div>
@@ -119,8 +120,8 @@
             <input type="checkbox" id="spectateEnabled" /> <span>Live spectate (refresh ~1.5s)</span>
           </label>
           <p class="sub spectate-open-wrap">
-            <button type="button" class="btn btn-sm" id="openTableSpectate">Open table page (spectate)</button>
-            <span class="sub-inline"> Full felt UI with all cards; use the same browser after admin login.</span>
+            <button type="button" class="btn btn-sm" id="openTableSpectate">Open spectate page</button>
+            <span class="sub-inline"> Dedicated <code>/admin/spectate.html</code> — full felt, all hole cards, switches tables; same admin cookie.</span>
           </p>
           <p class="sub spectate-open-feedback hidden" id="spectateOpenFeedback" aria-live="polite"></p>
           <p class="err" id="spectateErr"></p>

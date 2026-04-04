@@ -1,0 +1,42 @@
+/* Dedicated admin spectate page — layout tweaks on top of /styles.css */
+
+.spectate-app .top {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.spectate-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.toolbar-table select {
+  min-width: 14rem;
+}
+
+#pollHint {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.spectate-strip h2 {
+  margin: 0 0 0.25rem;
+}
+
+.spectate-app .table-panel {
+  margin-top: 0.5rem;
+}
+
+.spectate-app .foot {
+  margin-top: 1rem;
+  padding: 0.5rem 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.login-panel:not(.hidden) {
+  max-width: 32rem;
+}

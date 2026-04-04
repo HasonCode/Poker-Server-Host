@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin — Table spectate</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/admin/admin.css" />
+  <link rel="stylesheet" href="/admin/spectate-page.css" />
+</head>
+<body>
+  <div class="app spectate-app" id="spectateApp">
+    <header class="top">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">♠</span>
+        <div>
+          <h1>Table spectate</h1>
+          <p class="sub" id="barStatus">Checking session…</p>
+        </div>
+      </div>
+      <div class="toolbar spectate-toolbar">
+        <label class="field toolbar-table">
+          <span>Table</span>
+          <select id="tableSelect">
+            <option value="">— Select a table —</option>
+          </select>
+        </label>
+        <span class="sub" id="pollHint">Updates every 1.5s</span>
+        <a href="/admin" class="btn btn-sm">← Admin home</a>
+        <a href="/" class="btn btn-sm">Public UI</a>
+      </div>
+    </header>
+
+    <section class="panel login-panel hidden" id="loginGate">
+      <h2>Admin login required</h2>
+      <p class="sub">This page uses the admin session cookie (same as the admin dashboard). Sign in, then return here.</p>
+      <a href="/admin/oauth/login" class="btn btn-accent google-btn">Sign in with Google</a>
+      <p class="err" id="loginGateErr"></p>
+    </section>
+
+    <div id="spectateMain" class="hidden">
+      <section class="panel your-panel spectate-strip">
+        <h2>Spectator (admin)</h2>
+        <p class="sub" id="stripMeta">Full table view — all hole cards. You cannot act in the hand.</p>
+      </section>
+
+      <section class="table-panel">
+        <div class="hand-bar panel">
+          <span class="pill" id="statusPill">idle</span>
+          <span class="stat-inline"><b>Street</b> <span id="streetVal">—</span></span>
+          <span class="stat-inline highlight"><b>Pot</b> <span id="potVal" class="mono">0</span></span>
+          <span class="stat-inline"><b>Bet</b> <span id="betVal" class="mono">0</span></span>
+          <span class="stat-inline"><b>Min raise</b> <span id="minRaiseVal" class="mono">—</span></span>
+        </div>
+        <div class="felt-wrap" id="feltWrap">
+          <img src="/pokertable.png" class="felt-img" draggable="false" alt="Poker table" />
+          <div class="felt-pot">
+            <div class="felt-pot-label">POT</div>
+            <div class="felt-pot-val mono" id="feltPotVal">0</div>
+          </div>
+          <div class="felt-board" id="community"></div>
+          <div class="felt-seat" data-seat="1"></div>
+          <div class="felt-seat" data-seat="2"></div>
+          <div class="felt-seat" data-seat="3"></div>
+          <div class="felt-seat" data-seat="4"></div>
+          <div class="felt-seat" data-seat="5"></div>
+          <div class="felt-seat" data-seat="6"></div>
+          <div class="felt-seat" data-seat="7"></div>
+          <div class="felt-seat" data-seat="8"></div>
+          <div class="felt-seat" data-seat="9"></div>
+          <div class="felt-seat" data-seat="10"></div>
+        </div>
+        <div class="winners hidden" id="winners"></div>
+      </section>
+
+      <section class="panel log-panel">
+        <h2>Action log</h2>
+        <ol class="log" id="actionLog"></ol>
+      </section>
+
+      <footer class="foot"><code id="endpointEl"></code></footer>
+    </div>
+  </div>
+  <script src="/admin/spectate.js"></script>
+</body>
+</html>
