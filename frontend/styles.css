@@ -331,6 +331,15 @@ textarea {
 .felt-seat.you { border-color: rgba(62,207,142,0.5); }
 .felt-seat.folded { opacity: 0.4; }
 
+body.spectate-mode .your-panel {
+  border-color: rgba(139, 155, 176, 0.35);
+  background: linear-gradient(145deg, rgba(28, 36, 48, 0.55), rgba(18, 24, 32, 0.45));
+}
+body.spectate-mode .felt-seat.spectate-ghost.occupied {
+  box-shadow: 0 0 0 1px rgba(139, 155, 176, 0.28);
+}
+.spectate-ghost-note { margin: 0; max-width: 28rem; line-height: 1.4; }
+
 .felt-seat[data-seat="1"]  { left: 36%; top: 88%; }
 .felt-seat[data-seat="2"]  { left: 15%; top: 77%; }
 .felt-seat[data-seat="3"]  { left: 4%;  top: 48%; transform: translate(0%, -50%); }

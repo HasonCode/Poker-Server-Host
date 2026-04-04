@@ -58,6 +58,7 @@
   const specStreet = $("#specStreet");
   const specPot = $("#specPot");
   const specActor = $("#specActor");
+  const openTableSpectate = $("#openTableSpectate");
 
   function esc(s) {
     const d = document.createElement("div");
@@ -557,6 +558,18 @@
     spectateEnabled.addEventListener("change", () => {
       if (spectateEnabled.checked) startSpectatePoll();
       else stopSpectatePoll();
+    });
+  }
+
+  if (openTableSpectate) {
+    openTableSpectate.addEventListener("click", () => {
+      if (!selectedTable) {
+        spectateErr.textContent = "Select a table first.";
+        return;
+      }
+      spectateErr.textContent = "";
+      const path = "/?table=" + encodeURIComponent(selectedTable) + "&spectate=1";
+      window.open(path, "_blank", "noopener,noreferrer");
     });
   }
 

@@ -53,17 +53,18 @@ end
 --- @param secure boolean|nil If true, add Secure (use when the site is served over HTTPS).
 function M.session_cookie(token, secure)
   local suf = secure and "; Secure" or ""
+  -- Path=/ so the session is sent on /v1/... (e.g. table spectate on the main UI).
   return SESSION_COOKIE
     .. "="
     .. token
-    .. "; Path=/admin; HttpOnly; SameSite=Lax; Max-Age="
+    .. "; Path=/; HttpOnly; SameSite=Lax; Max-Age="
     .. SESSION_TTL
     .. suf
 end
 
 --- Build the Set-Cookie header to clear the session.
 function M.clear_cookie()
-  return SESSION_COOKIE .. "=; Path=/admin; HttpOnly; SameSite=Lax; Max-Age=0"
+  return SESSION_COOKIE .. "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
 end
 
 --- Build the Google OAuth2 authorization URL.

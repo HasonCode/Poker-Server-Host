@@ -63,6 +63,13 @@
   if (urlParams.get("table")) tableIdInput.value = urlParams.get("table");
   if (urlParams.get("name"))  joinName.value = urlParams.get("name");
 
+  const spectateMode = (function () {
+    const v = urlParams.get("spectate");
+    return v === "1" || v === "true";
+  })();
+
+  const botPanel = $(".bot-panel");
+
   /* ── helpers ──────────────────────────────────────── */
 
   function tableId() { return (tableIdInput.value || "demo").trim() || "demo"; }
@@ -73,6 +80,9 @@
 
   async function apiFetch(method, path, body) {
     const opts = { method, headers: { "Accept": "application/json" } };
+    if (spectateMode) {
+      opts.credentials = "include";
+    }
     if (playerToken) {
       opts.headers["X-Player-Token"] = playerToken;
     }
@@ -88,6 +98,7 @@
       const msg = data?.error?.message || res.statusText;
       const err = new Error(msg);
       err.apiCode = data?.error?.code;
+      err.httpStatus = res.status;
       throw err;
     }
     return data;
@@ -151,13 +162,23 @@
     mySeat = findMySeat(data);
     const hand = data.hand || {};
 
-    if (playerId && mySeat) {
+    if (spectateMode) {
+      joinPanel.classList.add("hidden");
+      gameArea.classList.remove("hidden");
+      yourNameEl.textContent = "Spectator";
+      yourMetaEl.textContent = "Admin view — all hole cards visible";
+      yourCardsEl.replaceChildren();
+      const ph = document.createElement("p");
+      ph.className = "sub spectate-ghost-note";
+      ph.textContent = "Not seated. Hole cards are shown at each seat.";
+      yourCardsEl.appendChild(ph);
+    } else if (playerId && mySeat) {
       joinPanel.classList.add("hidden");
       gameArea.classList.remove("hidden");
     }
 
     /* your info */
-    if (playerId && mySeat) {
+    if (!spectateMode && playerId && mySeat) {
       const seatInfo = data.seats[mySeat - 1];
       yourNameEl.textContent = playerId;
       const tags = [];
@@ -236,7 +257,7 @@
     }
 
     /* action panel */
-    const myTurn = isMyTurn(data);
+    const myTurn = !spectateMode && isMyTurn(data);
     turnBadge.classList.toggle("hidden", !myTurn);
     $$("#actionBtns .btn").forEach(b => b.disabled = !myTurn);
     if (myTurn) {
@@ -251,9 +272,9 @@
     renderLog(hand);
 
     /* connection */
-    connState.textContent = "Connected";
+    connState.textContent = spectateMode ? "Spectating (admin)" : "Connected";
     connState.className = "sub";
-    endpointEl.textContent = apiBase() + "/state";
+    endpointEl.textContent = spectateMode ? apiBase() + "/state?spectate=1" : apiBase() + "/state";
   }
 
   function getContrib(hand, seat) {
@@ -299,6 +320,7 @@
         + (s && s.player_id ? " occupied" : "")
         + (hand.action_to_seat === i ? " acting" : "")
         + (i === mySeat ? " you" : "")
+        + (spectateMode ? " spectate-ghost" : "")
         + (isFolded ? " folded" : "");
       el.dataset.seat = i;
 
@@ -387,10 +409,15 @@
 
   async function poll() {
     try {
-      const data = await apiFetch("GET", apiBase() + "/state");
+      const path = spectateMode ? apiBase() + "/state?spectate=1" : apiBase() + "/state";
+      const data = await apiFetch("GET", path);
       renderAll(data);
     } catch (e) {
-      connState.textContent = "Error: " + e.message;
+      let msg = e.message;
+      if (spectateMode && (e.apiCode === "unauthorized" || e.httpStatus === 401 || e.httpStatus === 403 || e.httpStatus === 503)) {
+        msg = "Admin login required — open /admin and sign in, then reload this page.";
+      }
+      connState.textContent = "Error: " + msg;
       connState.className = "sub";
     }
   }
@@ -612,6 +639,18 @@
   let tableListTimer = null;
   const TABLE_LIST_INTERVAL = 5000;
 
+  function ensureTableOption(tid) {
+    if (!tid || !tableIdInput) return;
+    const exists = [...tableIdInput.options].some(o => o.value === tid);
+    if (!exists) {
+      const opt = document.createElement("option");
+      opt.value = tid;
+      opt.textContent = tid + " (spectate)";
+      tableIdInput.appendChild(opt);
+    }
+    tableIdInput.value = tid;
+  }
+
   async function loadTableList() {
     try {
       const data = await apiFetch("GET", "/v1/tables");
@@ -627,6 +666,9 @@
       if (tables.find(t => t.table_id === prev)) {
         tableIdInput.value = prev;
       }
+      if (spectateMode) {
+        ensureTableOption(tableId());
+      }
     } catch { /* keep current options */ }
   }
 
@@ -640,12 +682,28 @@
   refreshBtn.addEventListener("click", () => { loadTableList(); poll(); refreshBotList(); });
   tableIdInput.addEventListener("change", () => {
     if (playerId) startPoll();
+    else if (spectateMode) startPoll();
     else poll();
   });
 
+  if (spectateMode) {
+    document.body.classList.add("spectate-mode");
+    joinPanel.classList.add("hidden");
+    gameArea.classList.remove("hidden");
+    if (leaveBtn) leaveBtn.classList.add("hidden");
+    if (actionPanel) actionPanel.classList.add("hidden");
+    if (botPanel) botPanel.classList.add("hidden");
+  }
+
   loadTableList().then(() => {
-    poll();
-    refreshBotList();
-    startTableListPoll();
+    if (spectateMode) {
+      ensureTableOption(tableId());
+      startPoll();
+      refreshBotList();
+    } else {
+      poll();
+      refreshBotList();
+      startTableListPoll();
+    }
   });
 })();

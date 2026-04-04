@@ -515,6 +515,13 @@ local function run_http()
   srv:route("GET", "/v1/tables/:id/state", function(req, params, s)
     local c = resolve_table(params, s)
     if not c then return not_found_table end
+    local q = req.query or {}
+    local want_spectate = q.spectate == "1" or q.spectate == "true"
+    if want_spectate then
+      local sess, err2 = require_admin(req)
+      if not sess then return err2 end
+      return table_snapshot(c)
+    end
     local auth_pid = resolve_auth_player(req, c)
     return filter_snapshot_for_player(table_snapshot(c), auth_pid, c.tbl)
   end)
