@@ -642,6 +642,7 @@ local function run_http()
   local admin_port           = tonumber(os.getenv("POKER_PORT") or "8080") or 8080
   local ADMIN_REDIRECT_URI   = os.getenv("ADMIN_REDIRECT_URI")
     or ("http://localhost:" .. admin_port .. "/admin/oauth/callback")
+  local ADMIN_COOKIE_SECURE  = (ADMIN_REDIRECT_URI:sub(1, 8) == "https://")
 
   local function require_admin(req)
     if ADMIN_EMAIL == "" then
@@ -721,7 +722,7 @@ local function run_http()
       status = "302 Found",
       headers = {
         Location = "/admin",
-        ["Set-Cookie"] = admin_auth.session_cookie(token),
+        ["Set-Cookie"] = admin_auth.session_cookie(token, ADMIN_COOKIE_SECURE),
       },
       body = "",
     }

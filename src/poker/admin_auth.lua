@@ -50,8 +50,15 @@ function M.validate_session(req, admin_email)
 end
 
 --- Build the Set-Cookie header value for a session.
-function M.session_cookie(token)
-  return SESSION_COOKIE .. "=" .. token .. "; Path=/admin; HttpOnly; SameSite=Lax; Max-Age=" .. SESSION_TTL
+--- @param secure boolean|nil If true, add Secure (use when the site is served over HTTPS).
+function M.session_cookie(token, secure)
+  local suf = secure and "; Secure" or ""
+  return SESSION_COOKIE
+    .. "="
+    .. token
+    .. "; Path=/admin; HttpOnly; SameSite=Lax; Max-Age="
+    .. SESSION_TTL
+    .. suf
 end
 
 --- Build the Set-Cookie header to clear the session.
@@ -89,7 +96,9 @@ local function b64url_decode(input)
   input = input:gsub("[^" .. b .. "=]", "")
   return (input:gsub(".", function(x)
     if x == "=" then return "" end
-    local r, f = "", (b:find(x) - 1)
+    local pos = b:find(x, 1, true)
+    if not pos then return "" end
+    local r, f = "", pos - 1
     for i = 6, 1, -1 do
       r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and "1" or "0")
     end
@@ -106,6 +115,9 @@ end
 
 --- Extract the email from a JWT ID token (decode payload, no signature check).
 function M.decode_id_token(id_token)
+  if type(id_token) ~= "string" or id_token == "" then
+    return nil, "id_token must be a non-empty string"
+  end
   local parts = {}
   for part in id_token:gmatch("[^%.]+") do
     parts[#parts + 1] = part
@@ -119,11 +131,26 @@ function M.decode_id_token(id_token)
   return payload
 end
 
+--- Pick HTTP(S) client: LuaSec's ssl.https is required for reliable HTTPS on many servers.
+local function http_request_impl()
+  local http_ok, http = pcall(require, "socket.http")
+  if not http_ok then return nil, "socket.http not available" end
+  local sec_ok, https = pcall(require, "ssl.https")
+  if sec_ok and https and https.request then
+    return https
+  end
+  io.stderr:write(
+    "[admin] ssl.https (LuaSec) not available — Google token HTTPS may fail. "
+      .. "Install lua-sec / lua5.4-sec (e.g. apt install lua5.4-sec).\n"
+  )
+  return http
+end
+
 --- Exchange an authorization code for tokens via Google's token endpoint.
 --- Returns { id_token, access_token, email } or nil, err.
 function M.exchange_code(code, client_id, client_secret, redirect_uri)
-  local http_ok, http = pcall(require, "socket.http")
-  if not http_ok then return nil, "socket.http not available" end
+  local http_mod, herr = http_request_impl()
+  if not http_mod then return nil, herr end
   local ltn12_ok, ltn12 = pcall(require, "ltn12")
   if not ltn12_ok then return nil, "ltn12 not available" end
   local http_server = require("poker.http_server")
@@ -136,7 +163,7 @@ function M.exchange_code(code, client_id, client_secret, redirect_uri)
     .. "&grant_type=authorization_code"
 
   local response_body = {}
-  local res, status_code, response_headers = http.request({
+  local req_tbl = {
     url = "https://oauth2.googleapis.com/token",
     method = "POST",
     headers = {
@@ -145,7 +172,14 @@ function M.exchange_code(code, client_id, client_secret, redirect_uri)
     },
     source = ltn12.source.string(post_body),
     sink = ltn12.sink.table(response_body),
-  })
+  }
+
+  local ok_rq, res, status_code = pcall(function()
+    return http_mod.request(req_tbl)
+  end)
+  if not ok_rq then
+    return nil, "HTTPS request error (install lua-sec / lua5.x-sec for Google OAuth): " .. tostring(res)
+  end
 
   if not res then
     return nil, "HTTP request failed: " .. tostring(status_code)
@@ -162,7 +196,9 @@ function M.exchange_code(code, client_id, client_secret, redirect_uri)
   if not ok_j then return nil, "Failed to parse token response" end
 
   local id_token = token_data.id_token
-  if not id_token then return nil, "No id_token in response" end
+  if type(id_token) ~= "string" or id_token == "" then
+    return nil, "No id_token in response"
+  end
 
   local payload, perr = M.decode_id_token(id_token)
   if not payload then return nil, "Failed to decode id_token: " .. tostring(perr) end
