@@ -491,6 +491,34 @@ local function run_http()
     return
   end
 
+  --- Must be defined before routes that call it. Admin cookie OR POKER_SPECTATE_SECRET (header / query).
+  local function spectate_authorized(req)
+    local admin_email = os.getenv("ADMIN_EMAIL") or ""
+    if admin_email ~= "" then
+      local sess = admin_auth.validate_session(req, admin_email)
+      if sess then
+        return true
+      end
+    end
+    local secret = os.getenv("POKER_SPECTATE_SECRET") or ""
+    if secret ~= "" then
+      local h = req.headers or {}
+      local sent = h["x-spectate-secret"] or h["x-spectate-key"] or ""
+      if type(sent) == "string" and sent ~= "" then
+        sent = sent:match("^%s*(.-)%s*$") or sent
+        if sent == secret then
+          return true
+        end
+      end
+      local q = req.query or {}
+      local qk = q.spectate_key or q.key
+      if qk and qk == secret then
+        return true
+      end
+    end
+    return false
+  end
+
   srv:route("GET", "/health", function()
     return api.health()
   end)
@@ -518,8 +546,15 @@ local function run_http()
     local q = req.query or {}
     local want_spectate = q.spectate == "1" or q.spectate == "true"
     if want_spectate then
-      local sess, err2 = require_admin(req)
-      if not sess then return err2 end
+      if not spectate_authorized(req) then
+        return {
+          "401 Unauthorized",
+          api.error_body(
+            "spectate_denied",
+            "Spectate denied. Sign in at /admin (same browser), or set env POKER_SPECTATE_SECRET and pass it via X-Spectate-Secret or ?spectate_key= on the request."
+          ),
+        }
+      end
       return table_snapshot(c)
     end
     local auth_pid = resolve_auth_player(req, c)

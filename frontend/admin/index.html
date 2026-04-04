@@ -109,8 +109,11 @@
           <summary class="sub">Spectate (all cards)</summary>
           <p class="sub spectate-help">
             When enabled, this panel polls the server for a <strong>privileged snapshot</strong> that includes
-            every player’s hole cards and the board. Only admins with a valid session can call this API.
-            Use it to monitor play fairly; players still only see their own cards in the public game UI.
+            every player’s hole cards and the board. The table page spectate link only works on the
+            <strong>same site URL</strong> as this admin panel (same protocol and host) after you sign in here.
+            Without Google OAuth, set server env <code>POKER_SPECTATE_SECRET</code> and pass it once as
+            <code>?spectate_key=…</code> or use <code>localStorage.pokerSpectateSecret</code>.
+            Players still only see their own cards in the normal game UI.
           </p>
           <label class="field cb-field spectate-toggle">
             <input type="checkbox" id="spectateEnabled" /> <span>Live spectate (refresh ~1.5s)</span>

@@ -17,7 +17,8 @@ local function parse_cookies(header)
   for pair in header:gmatch("[^;]+") do
     local k, v = pair:match("^%s*([^=]+)=(.*)%s*$")
     if k then
-      cookies[k:match("^%s*(.-)%s*$")] = v:match("^%s*(.-)%s*$")
+      local key = (k:match("^%s*(.-)%s*$") or k):lower()
+      cookies[key] = (v:match("^%s*(.-)%s*$") or v)
     end
   end
   return cookies

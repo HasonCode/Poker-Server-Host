@@ -69,6 +69,29 @@
     return v === "1" || v === "true";
   })();
 
+  const spectateKeyFromUrl = urlParams.get("spectate_key");
+  if (spectateMode && spectateKeyFromUrl) {
+    try {
+      sessionStorage.setItem("pokerSpectateSecret", spectateKeyFromUrl);
+    } catch (_) { /* ignore */ }
+    urlParams.delete("spectate_key");
+    const qs = urlParams.toString();
+    const newSearch = qs ? "?" + qs : "";
+    history.replaceState({}, "", location.pathname + newSearch + location.hash);
+  }
+
+  function getSpectateSecret() {
+    try {
+      return (
+        sessionStorage.getItem("pokerSpectateSecret") ||
+        localStorage.getItem("pokerSpectateSecret") ||
+        ""
+      );
+    } catch {
+      return "";
+    }
+  }
+
   const botPanel = $(".bot-panel");
 
   /* ── helpers ──────────────────────────────────────── */
@@ -83,6 +106,10 @@
     const opts = { method, headers: { "Accept": "application/json" } };
     if (spectateMode) {
       opts.credentials = "include";
+      const sk = getSpectateSecret();
+      if (sk) {
+        opts.headers["X-Spectate-Secret"] = sk;
+      }
     }
     if (signal) {
       opts.signal = signal;
@@ -304,7 +331,7 @@
     /* connection */
     connState.textContent = spectateMode ? "Spectating (admin)" : "Connected";
     connState.className = "sub";
-    endpointEl.textContent = spectateMode ? apiBase() + "/state?spectate=1" : apiBase() + "/state";
+    endpointEl.textContent = spectateMode ? spectateStateUrl() : apiBase() + "/state";
   }
 
   function getContrib(hand, seat) {
@@ -437,15 +464,35 @@
 
   /* ── polling ──────────────────────────────────────── */
 
+  function spectateStateUrl() {
+    let path = apiBase() + "/state?spectate=1";
+    const sk = getSpectateSecret();
+    if (sk) {
+      path += "&spectate_key=" + encodeURIComponent(sk);
+    }
+    return path;
+  }
+
   async function poll() {
     try {
-      const path = spectateMode ? apiBase() + "/state?spectate=1" : apiBase() + "/state";
+      const path = spectateMode ? spectateStateUrl() : apiBase() + "/state";
       const data = await apiFetch("GET", path);
       renderAll(data);
     } catch (e) {
       let msg = e.message;
-      if (spectateMode && (e.apiCode === "unauthorized" || e.httpStatus === 401 || e.httpStatus === 403 || e.httpStatus === 503)) {
-        msg = "Admin login required — open /admin in this browser, sign in, then reload this page.";
+      if (spectateMode) {
+        if (e.apiCode === "spectate_denied" || e.httpStatus === 401) {
+          msg =
+            "Spectate denied. Use the exact same origin as admin (same https host), sign in at /admin, then reload. " +
+            "If OAuth is unavailable, set env POKER_SPECTATE_SECRET on the server and open once with " +
+            "?spectate=1&spectate_key=YOUR_SECRET or set localStorage.pokerSpectateSecret.";
+        } else if (e.apiCode === "unauthorized") {
+          msg =
+            "Admin login required — open /admin on this same URL, sign in, then reload this spectate tab.";
+        } else if (e.httpStatus === 403 || e.httpStatus === 503) {
+          msg =
+            "Server rejected spectate (" + (e.httpStatus || "?") + "). Check admin OAuth env or POKER_SPECTATE_SECRET.";
+        }
       }
       connState.textContent = "Error: " + msg;
       connState.className = "sub spectate-error";

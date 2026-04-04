@@ -31,7 +31,8 @@ end
 --- Validate the session cookie on a request.
 --- Returns the session table { email, created_at } or nil.
 function M.validate_session(req, admin_email)
-  local token = req.cookies and req.cookies[SESSION_COOKIE]
+  local c = req.cookies
+  local token = c and (c[SESSION_COOKIE] or c[SESSION_COOKIE:lower()])
   if not token or token == "" then return nil end
 
   local sess = sessions[token]
