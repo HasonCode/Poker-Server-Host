@@ -292,6 +292,11 @@ function M:match_handler(method, path)
     local h = self.routes["POST /admin/api/tables/:id/delete"]
     if h then return h, { table_id = id } end
   end
+  id = path:match("^/admin/api/tables/([^/]+)/snapshot$")
+  if id and method == "GET" then
+    local h = self.routes["GET /admin/api/tables/:id/snapshot"]
+    if h then return h, { table_id = id } end
+  end
 
   return nil
 end

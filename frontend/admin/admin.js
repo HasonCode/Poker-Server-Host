@@ -47,6 +47,17 @@
   let selectedTable = null;
   let pollTimer = null;
   const POLL_INTERVAL = 3000;
+  let spectateTimer = null;
+  const SPECTATE_INTERVAL = 1500;
+  const spectateEnabled = $("#spectateEnabled");
+  const spectateErr = $("#spectateErr");
+  const specCommunity = $("#specCommunity");
+  const specSeats = $("#specSeats");
+  const specLog = $("#specLog");
+  const specStatus = $("#specStatus");
+  const specStreet = $("#specStreet");
+  const specPot = $("#specPot");
+  const specActor = $("#specActor");
 
   function esc(s) {
     const d = document.createElement("div");
@@ -78,6 +89,17 @@
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 
+  function stopSpectatePoll() {
+    if (spectateTimer) { clearInterval(spectateTimer); spectateTimer = null; }
+  }
+
+  function startSpectatePoll() {
+    stopSpectatePoll();
+    if (!spectateEnabled || !spectateEnabled.checked || !selectedTable) return;
+    loadSpectateSnapshot();
+    spectateTimer = setInterval(loadSpectateSnapshot, SPECTATE_INTERVAL);
+  }
+
   function startPoll() {
     stopPoll();
     pollTimer = setInterval(() => {
@@ -88,6 +110,7 @@
   function showLogin() {
     isLoggedIn = false;
     stopPoll();
+    stopSpectatePoll();
     loginPanel.classList.remove("hidden");
     dashboard.classList.add("hidden");
     logoutBtn.classList.add("hidden");
@@ -165,6 +188,7 @@
     selectedTableName.textContent = tid;
     tablePanel.classList.remove("hidden");
     await loadTableStats(tid);
+    startSpectatePoll();
   }
 
   async function loadTableStats(tid) {
@@ -188,6 +212,160 @@
     } catch (e) {
       settingsErr.textContent = e.message;
     }
+  }
+
+  /* ── Spectate (full cards) ─────────────────────────── */
+
+  function parseCard(str) {
+    if (!str || str === "?") return null;
+    const suit = str.slice(-1);
+    const rank = str.slice(0, -1);
+    return { rank, suit };
+  }
+
+  function isRed(suit) {
+    return suit === "♥" || suit === "♦";
+  }
+
+  function makeSpecCard(str) {
+    const el = document.createElement("span");
+    const parsed = parseCard(str);
+    if (!parsed) {
+      el.className = "spec-card placeholder";
+      el.textContent = "?";
+      return el;
+    }
+    el.className = "spec-card" + (isRed(parsed.suit) ? " red" : "");
+    const r = document.createElement("span");
+    r.className = "spec-card-rank";
+    r.textContent = parsed.rank;
+    const s = document.createElement("span");
+    s.className = "spec-card-suit";
+    s.textContent = parsed.suit;
+    el.appendChild(r);
+    el.appendChild(s);
+    return el;
+  }
+
+  function makeSpecFacedown() {
+    const el = document.createElement("span");
+    el.className = "spec-card facedown";
+    el.textContent = "🂠";
+    return el;
+  }
+
+  async function loadSpectateSnapshot() {
+    if (!selectedTable || !spectateEnabled || !spectateEnabled.checked) return;
+    spectateErr.textContent = "";
+    try {
+      const data = await apiFetch(
+        "GET",
+        "/admin/api/tables/" + encodeURIComponent(selectedTable) + "/snapshot"
+      );
+      renderSpectate(data);
+    } catch (e) {
+      spectateErr.textContent = e.message;
+    }
+  }
+
+  function renderSpectate(data) {
+    const tbl = data.table || {};
+    const hand = tbl.hand || {};
+    const bustMap = data.bust_counts || {};
+    const seats = tbl.seats || [];
+    const max = tbl.max_seats || 10;
+    const hc = hand.hole_cards || {};
+    const folded = hand.folded || {};
+
+    specStatus.textContent = hand.status || "idle";
+    specStatus.className = "pill spec-pill " + (hand.status === "active" ? "active" : "idle");
+    specStreet.textContent = hand.street || "—";
+    specPot.textContent = hand.pot != null ? hand.pot : 0;
+
+    const ats = hand.action_to_seat;
+    if (hand.status === "active" && ats && seats[ats - 1] && typeof seats[ats - 1] === "object") {
+      specActor.textContent = seats[ats - 1].player_id + " (seat " + ats + ")";
+    } else {
+      specActor.textContent = "—";
+    }
+
+    specCommunity.replaceChildren();
+    const comm = hand.community || [];
+    if (comm.length === 0 && hand.status === "active") {
+      for (let i = 0; i < 5; i++) specCommunity.appendChild(makeSpecFacedown());
+    } else if (comm.length === 0) {
+      specCommunity.innerHTML = '<span class="sub">—</span>';
+    } else {
+      comm.forEach(c => specCommunity.appendChild(makeSpecCard(String(c))));
+      for (let i = comm.length; i < 5; i++) specCommunity.appendChild(makeSpecFacedown());
+    }
+
+    specSeats.replaceChildren();
+    for (let i = 1; i <= max; i++) {
+      const cell = document.createElement("div");
+      cell.className = "spec-seat";
+      const s = seats[i - 1];
+      const pid = s && s.player_id;
+      if (!pid) {
+        cell.innerHTML = '<span class="spec-seat-empty">Seat ' + i + "</span>";
+        specSeats.appendChild(cell);
+        continue;
+      }
+      const bustN = bustMap[pid] != null ? bustMap[pid] : 0;
+      const isFolded = folded && folded[String(i)];
+      if (ats === i && hand.status === "active") cell.classList.add("acting");
+      if (isFolded) cell.classList.add("folded");
+
+      const head = document.createElement("div");
+      head.className = "spec-seat-head";
+      head.innerHTML =
+        "<span class='spec-seat-name'>" + esc(pid) + "</span>" +
+        "<span class='mono spec-seat-stack'>" + s.stack + "</span>" +
+        "<span class='spec-busts' title='Times reached 0 chips (end of hand)'>💥 " + (bustN || 0) + "</span>";
+
+      const tags = [];
+      if (hand.button_seat === i) tags.push("BTN");
+      if (hand.sb_seat === i) tags.push("SB");
+      if (hand.bb_seat === i) tags.push("BB");
+      if (isFolded) tags.push("FOLD");
+
+      const cardsRow = document.createElement("div");
+      cardsRow.className = "spec-hole";
+      const cards = hc[String(i)];
+      if (cards && cards.length) {
+        cards.forEach(c => cardsRow.appendChild(makeSpecCard(String(c))));
+      } else if (hand.status === "active" && !isFolded) {
+        cardsRow.appendChild(makeSpecFacedown());
+        cardsRow.appendChild(makeSpecFacedown());
+      }
+      cell.appendChild(head);
+      if (tags.length) {
+        const tg = document.createElement("div");
+        tg.className = "spec-tags";
+        tg.textContent = tags.join(" · ");
+        cell.appendChild(tg);
+      }
+      cell.appendChild(cardsRow);
+      specSeats.appendChild(cell);
+    }
+
+    specLog.replaceChildren();
+    const log = hand.action_log || [];
+    if (log.length === 0) {
+      const li = document.createElement("li");
+      li.className = "sub";
+      li.textContent = "No actions yet.";
+      specLog.appendChild(li);
+      return;
+    }
+    log.slice(-24).forEach(entry => {
+      const li = document.createElement("li");
+      const amt = entry.amount != null ? " " + entry.amount : "";
+      li.innerHTML =
+        "<b>" + esc(entry.player_id) + "</b> " + esc(entry.action) + amt +
+        " <span class='sub'>[" + esc(entry.street || "") + "]</span>";
+      specLog.appendChild(li);
+    });
   }
 
   /* ── Create / Delete ──────────────────────────────── */
@@ -244,6 +422,7 @@
         "<td>" + p.seat + "</td>" +
         "<td>" + esc(p.player_id) + "</td>" +
         "<td class='mono'>" + p.stack + "</td>" +
+        "<td class='mono'>" + (p.busts != null ? p.busts : 0) + "</td>" +
         "<td>" + (isAI ? "Yes" : "") + "</td>" +
         "<td></td>";
       const kickBtn = document.createElement("button");
@@ -366,6 +545,13 @@
     if (isLoggedIn) loadTables();
     else checkSession();
   });
+
+  if (spectateEnabled) {
+    spectateEnabled.addEventListener("change", () => {
+      if (spectateEnabled.checked) startSpectatePoll();
+      else stopSpectatePoll();
+    });
+  }
 
   checkSession();
 })();

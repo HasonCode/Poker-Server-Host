@@ -88,6 +88,7 @@ local function create_table_context(id, max_seats, opts)
     token_to_player = {},
     zero_chips = opts.zero_chips or "rebuy",
     rebuy_amount = opts.rebuy_amount or 500,
+    bust_counts = {}, -- player_id -> times reached 0 chips at end of hand (eject or rebuy)
   }
 end
 
@@ -278,6 +279,8 @@ local function handle_zero_chips(ctx)
     local s = ctx.tbl:get_seat(i)
     if s and s.stack <= 0 then
       local pid = s.player_id
+      ctx.bust_counts = ctx.bust_counts or {}
+      ctx.bust_counts[pid] = (ctx.bust_counts[pid] or 0) + 1
       if ctx.zero_chips == "eject" then
         ctx.tbl:leave_seat(i)
         if ctx.action_queue then ctx.action_queue[pid] = nil end
@@ -855,7 +858,9 @@ local function run_http()
       if si then
         seated = seated + 1
         total_chips = total_chips + si.stack
-        players[#players + 1] = { seat = i, player_id = si.player_id, stack = si.stack }
+        local pid = si.player_id
+        local busts = (c.bust_counts and c.bust_counts[pid]) or 0
+        players[#players + 1] = { seat = i, player_id = pid, stack = si.stack, busts = busts }
       end
     end
 
@@ -880,6 +885,29 @@ local function run_http()
       ai_players = c.ai_players,
       zero_chips = c.zero_chips,
       rebuy_amount = c.rebuy_amount,
+    }
+  end)
+
+  -- Full table state for admin spectate (all hole cards visible; requires admin session).
+  srv:route("GET", "/admin/api/tables/:id/snapshot", function(req, params, s)
+    local sess, err2 = require_admin(req)
+    if not sess then return err2 end
+
+    local c = resolve_table(params, s)
+    if not c then return not_found_table end
+
+    local snap = table_snapshot(c)
+    local busts = {}
+    if c.bust_counts then
+      for pid, n in pairs(c.bust_counts) do
+        busts[tostring(pid)] = n
+      end
+    end
+    return {
+      ok = true,
+      table_id = c.tbl.id,
+      table = snap,
+      bust_counts = busts,
     }
   end)
 

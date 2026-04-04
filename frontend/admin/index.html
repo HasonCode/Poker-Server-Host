@@ -101,6 +101,34 @@
           </div>
         </div>
 
+        <!-- Spectate (admin-only full card view) -->
+        <details class="spectate-details" id="spectateDetails" open>
+          <summary class="sub">Spectate (all cards)</summary>
+          <p class="sub spectate-help">
+            When enabled, this panel polls the server for a <strong>privileged snapshot</strong> that includes
+            every player’s hole cards and the board. Only admins with a valid session can call this API.
+            Use it to monitor play fairly; players still only see their own cards in the public game UI.
+          </p>
+          <label class="field cb-field spectate-toggle">
+            <input type="checkbox" id="spectateEnabled" /> <span>Live spectate (refresh ~1.5s)</span>
+          </label>
+          <p class="err" id="spectateErr"></p>
+          <div class="spectate-board" id="spectateBoard">
+            <div class="spec-hand-bar">
+              <span class="pill spec-pill" id="specStatus">idle</span>
+              <span class="spec-meta"><b>Street</b> <span id="specStreet">—</span></span>
+              <span class="spec-meta highlight"><b>Pot</b> <span id="specPot" class="mono">0</span></span>
+              <span class="spec-meta"><b>Action</b> <span id="specActor">—</span></span>
+            </div>
+            <div class="spec-community-wrap">
+              <span class="spec-label">Board</span>
+              <div class="spec-community" id="specCommunity"></div>
+            </div>
+            <div class="spec-seats" id="specSeats"></div>
+            <ol class="spec-log" id="specLog"></ol>
+          </div>
+        </details>
+
         <!-- Players -->
         <h3>Seated Players</h3>
         <table class="data-table" id="playersTable">
@@ -109,6 +137,7 @@
               <th>Seat</th>
               <th>Player</th>
               <th>Stack</th>
+              <th>Busts</th>
               <th>AI</th>
               <th></th>
             </tr>
