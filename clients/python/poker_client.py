@@ -17,7 +17,10 @@ Uses only the standard library (urllib). Typical usage::
 
 from __future__ import annotations
 
+import atexit
 import json
+import signal
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -100,6 +103,38 @@ class PokerClient:
         self.base_url = _normalize_base_url(base_url)
         self.timeout = timeout
         self.token: Optional[str] = None
+        self._joined_table_id: Optional[str] = None
+        self._joined_player_id: Optional[str] = None
+        self._disconnect_hooks_registered = False
+
+    def _leave_if_joined(self) -> None:
+        """Best-effort leave when the process exits (Ctrl+C, SIGTERM, atexit)."""
+        tid = self._joined_table_id
+        pid = self._joined_player_id
+        if not tid or not pid:
+            return
+        try:
+            self.leave_table(tid, player_id=pid)
+        except Exception:
+            self._joined_table_id = None
+            self._joined_player_id = None
+            self.token = None
+
+    def _register_disconnect_hooks(self) -> None:
+        if self._disconnect_hooks_registered:
+            return
+        self._disconnect_hooks_registered = True
+        atexit.register(self._leave_if_joined)
+
+        def _sig_handler(signum: int, frame: Any) -> None:
+            self._leave_if_joined()
+            sys.exit(128 + signum)
+
+        try:
+            signal.signal(signal.SIGINT, _sig_handler)
+            signal.signal(signal.SIGTERM, _sig_handler)
+        except (ValueError, OSError):
+            pass
 
     def _path_table(self, table_id: str, suffix: str) -> str:
         tid = urllib.parse.quote(table_id, safe="")
@@ -186,15 +221,23 @@ class PokerClient:
         )
         if isinstance(resp, dict) and resp.get("token"):
             self.token = resp["token"]
+        self._joined_table_id = table_id
+        self._joined_player_id = player_id
+        self._register_disconnect_hooks()
         return resp
 
     def leave_table(self, table_id: str, *, player_id: str) -> Any:
         """Leave the table (removes the player from their seat)."""
-        return self._request_json(
+        resp = self._request_json(
             "POST",
             self._path_table(table_id, "leave"),
             {"player_id": player_id},
         )
+        if self._joined_table_id == table_id and self._joined_player_id == player_id:
+            self._joined_table_id = None
+            self._joined_player_id = None
+            self.token = None
+        return resp
 
     def is_my_turn(self, table_id: str, player_id: str) -> bool:
         """Return True if it is currently *player_id*'s turn to act."""

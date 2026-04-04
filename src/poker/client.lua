@@ -29,6 +29,8 @@ function M.new(opts)
     base_url = base,
     timeout = opts.timeout or 30,
     token = nil,
+    _joined_table_id = nil,
+    _joined_player_id = nil,
     _http = http,
     _ltn12 = ltn12,
   }, M)
@@ -149,13 +151,35 @@ function M:join_table(table_id, args)
   if data and data.token then
     self.token = data.token
   end
+  if not err then
+    self._joined_table_id = table_id
+    self._joined_player_id = args.player_id
+  end
   return data, err
 end
 
+--- Call before process exit (Lua has no portable auto-hook) to leave the table if still joined.
+function M:leave_if_joined()
+  local tid = self._joined_table_id
+  local pid = self._joined_player_id
+  if not tid or not pid then
+    return true
+  end
+  return self:leave_table(tid, pid)
+end
+
 function M:leave_table(table_id, player_id)
-  return self:_request("POST", path_table(table_id, "leave"), {
+  local data, err = self:_request("POST", path_table(table_id, "leave"), {
     player_id = player_id,
   })
+  if not err then
+    self.token = nil
+    if self._joined_table_id == table_id and self._joined_player_id == player_id then
+      self._joined_table_id = nil
+      self._joined_player_id = nil
+    end
+  end
+  return data, err
 end
 
 --- True if it is player_id's turn right now.

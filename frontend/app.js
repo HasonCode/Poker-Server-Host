@@ -403,6 +403,67 @@
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 
+  function showJoinPanel() {
+    joinPanel.classList.remove("hidden");
+    gameArea.classList.add("hidden");
+    joinPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (joinName) {
+      joinName.focus();
+      joinName.select();
+    }
+  }
+
+  function resetClientState() {
+    playerId = null;
+    playerToken = null;
+    mySeat = null;
+    lastData = null;
+    activeBotName = null;
+    botUploadStart.disabled = false;
+    botUploadStop.disabled = true;
+    botStatusEl.textContent = "";
+    actErr.textContent = "";
+    if (joinErr) joinErr.textContent = "";
+    connState.textContent = "Not seated";
+    connState.className = "sub";
+    showJoinPanel();
+  }
+
+  /** POST /leave with keepalive (no await); for tab close / refresh. */
+  function sendDisconnectLeave() {
+    const pid = playerId;
+    const tok = playerToken;
+    const tid = tableId();
+    if (!pid || !tok) return;
+    const path = apiBase(tid) + "/leave";
+    const url = location.origin + path;
+    const body = JSON.stringify({ player_id: pid });
+    try {
+      fetch(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Player-Token": tok,
+        },
+        body,
+        keepalive: true,
+      }).catch(function () {});
+    } catch (_) { /* ignore */ }
+  }
+
+  async function leaveTable() {
+    if (!playerId) return;
+    try {
+      await apiFetch("POST", apiBase() + "/leave", { player_id: playerId });
+    } catch {
+      /* still clear UI */
+    }
+    stopPoll();
+    resetClientState();
+    poll().catch(function () {});
+  }
+
   /* ── join / leave ─────────────────────────────────── */
 
   joinForm.addEventListener("submit", async (e) => {
@@ -423,21 +484,14 @@
     }
   });
 
-  leaveBtn.addEventListener("click", async () => {
-    if (!playerId) return;
-    try {
-      await apiFetch("POST", apiBase() + "/leave", { player_id: playerId });
-    } catch { /* ignore */ }
-    playerId = null;
-    playerToken = null;
-    mySeat = null;
-    activeBotName = null;
-    botUploadStart.disabled = false;
-    botUploadStop.disabled = true;
-    botStatusEl.textContent = "";
-    gameArea.classList.add("hidden");
-    joinPanel.classList.remove("hidden");
-    stopPoll();
+  leaveBtn.addEventListener("click", function () {
+    leaveTable();
+  });
+
+  /* Tab close / navigate away: eject seat (keepalive so request may finish). */
+  window.addEventListener("pagehide", function (ev) {
+    if (ev.persisted) return;
+    sendDisconnectLeave();
   });
 
   /* ── actions ──────────────────────────────────────── */
