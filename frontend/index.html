@@ -34,8 +34,13 @@
         <label class="field"><span>Chips</span>
           <input type="number" id="joinChips" value="500" min="1" required />
         </label>
-        <button type="submit" class="btn btn-accent">Join table</button>
+        <button type="submit" class="btn btn-accent" id="joinSubmit">Join table</button>
       </form>
+      <p class="sub join-hint" id="joinHint">
+        Closing this tab or navigating away removes you from the table. Closing the terminal or stopping a script does the same when using a client.
+        Join requests wait until the current hand ends and a seat is free (first come, first served).
+      </p>
+      <p class="sub join-wait hidden" id="joinWait">Waiting for a free seat between hands…</p>
       <p class="err" id="joinErr"></p>
     </section>
 

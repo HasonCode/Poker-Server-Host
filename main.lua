@@ -20,6 +20,7 @@ local function join_http_error(err)
     invalid_seat = { "400 Bad Request", "invalid_seat", "Seat must be between 1 and max_seats." },
     seat_taken = { "409 Conflict", "seat_taken", "That seat is already occupied." },
     table_full = { "409 Conflict", "table_full", "No empty seats available." },
+    already_seated = { "409 Conflict", "already_seated", "Player is already seated at this table." },
     invalid_player = { "400 Bad Request", "invalid_player", "player_id is required and non-empty." },
     invalid_chips = { "400 Bad Request", "invalid_chips", "chips must be a non-negative integer." },
   }
@@ -89,6 +90,7 @@ local function create_table_context(id, max_seats, opts)
     zero_chips = opts.zero_chips or "rebuy",
     rebuy_amount = opts.rebuy_amount or 500,
     bust_counts = {}, -- player_id -> times reached 0 chips at end of hand (eject or rebuy)
+    hidden = opts.hidden == true, -- if true, omitted from GET /v1/tables public list
   }
 end
 
@@ -139,6 +141,7 @@ local function create_server_state()
       demo = create_table_context("demo", 10, { with_ais = true }),
       players = create_table_context("players", 10, {}),
     },
+    pending_joins = {},
   }
 end
 
@@ -322,8 +325,148 @@ end
 
 local function run_http()
   local http_mod = poker.http_server()
+  local socket_ok, socket = pcall(require, "socket")
   local state = create_server_state()
   local root = script_dir()
+
+  local function pending_client_closed(client)
+    if not socket_ok then
+      return false
+    end
+    local r, sel_err = socket.select({ client }, nil, 0)
+    if sel_err or not r or #r == 0 then
+      return false
+    end
+    client:settimeout(0)
+    local chunk, err = client:receive(1)
+    if chunk == nil and err == "closed" then
+      return true
+    end
+    if chunk ~= nil then
+      return true
+    end
+    return false
+  end
+
+  local function join_response_success(c, player_id)
+    remove_player_token(c, player_id)
+    local token = generate_player_token()
+    c.player_tokens[player_id] = token
+    c.token_to_player[token] = player_id
+    return {
+      ok = true,
+      token = token,
+      table = filter_snapshot_for_player(table_snapshot(c), player_id, c.tbl),
+    }
+  end
+
+  --- @return "ok", body_tbl | "defer" | "error", err_pack
+  local function try_join_seat(c, j)
+    local player_id = tostring(j.player_id)
+    local chips = tonumber(j.chips)
+    if c.tbl:seat_for_player(player_id) then
+      return "error", join_http_error("already_seated")
+    end
+    local seat_raw = j.seat
+    local seat
+    if seat_raw == nil or seat_raw == "" then
+      seat = c.tbl:first_available_seat()
+      if not seat then
+        return "defer"
+      end
+    else
+      seat = tonumber(seat_raw)
+      if not seat or seat ~= math.floor(seat) then
+        return "error", {
+          "400 Bad Request",
+          api.error_body(
+            "bad_request",
+            "seat must be an integer between 1 and max_seats, or omitted for the first available seat."
+          ),
+        }
+      end
+      seat = math.floor(seat)
+      if c.tbl.seats[seat] then
+        return "defer"
+      end
+    end
+    if c.hand.status ~= "idle" then
+      return "defer"
+    end
+    local ok, err = c.tbl:seat_player({
+      seat = seat,
+      player_id = player_id,
+      chips = chips,
+    })
+    if not ok then
+      if err == "seat_taken" or err == "table_full" then
+        return "defer"
+      end
+      return "error", join_http_error(err)
+    end
+    return "ok", join_response_success(c, player_id)
+  end
+
+  local function process_pending_join_entry(pj)
+    local client = pj.client
+    local j = pj.json
+    local c = pj.ctx
+
+    if pending_client_closed(client) then
+      pcall(function()
+        client:close()
+      end)
+      return true
+    end
+
+    if os.clock() >= pj.deadline then
+      http_mod.send_json_response(
+        client,
+        "408 Request Timeout",
+        api.error_body(
+          "join_timeout",
+          "Timed out waiting to join. A seat opens between hands when the table is not full."
+        )
+      )
+      pcall(function()
+        client:close()
+      end)
+      return true
+    end
+
+    local kind, payload = try_join_seat(c, j)
+    if kind == "defer" then
+      return false
+    end
+    if kind == "error" then
+      http_mod.send_json_response(client, payload[1], payload[2])
+      pcall(function()
+        client:close()
+      end)
+      return true
+    end
+    http_mod.send_json_response(client, "200 OK", payload)
+    pcall(function()
+      client:close()
+    end)
+    return true
+  end
+
+  local function process_pending_joins(srv)
+    local s = srv.get_context()
+    for _, ctx in pairs(s.tables) do
+      table_snapshot(ctx)
+    end
+    local i = 1
+    while i <= #s.pending_joins do
+      if process_pending_join_entry(s.pending_joins[i]) then
+        table.remove(s.pending_joins, i)
+      else
+        i = i + 1
+      end
+    end
+  end
+
   local srv, err = http_mod.new({
     host = os.getenv("POKER_HOST") or "*",
     port = tonumber(os.getenv("POKER_PORT") or "8080") or 8080,
@@ -331,6 +474,7 @@ local function run_http()
       return state
     end,
     static_root = root .. "/frontend",
+    tick = process_pending_joins,
   })
 
   local function resolve_table(params, s)
@@ -356,12 +500,14 @@ local function run_http()
   srv:route("GET", "/v1/tables", function(_, _, s)
     local list = {}
     for tid, ctx in pairs(s.tables) do
-      list[#list + 1] = {
-        table_id = tid,
-        max_seats = ctx.tbl.max_seats,
-        seated = ctx.tbl:occupied_count(),
-        hand_status = ctx.hand.status,
-      }
+      if not ctx.hidden then
+        list[#list + 1] = {
+          table_id = tid,
+          max_seats = ctx.tbl.max_seats,
+          seated = ctx.tbl:occupied_count(),
+          hand_status = ctx.hand.status,
+        }
+      end
     end
     return { ok = true, tables = list }
   end)
@@ -395,44 +541,14 @@ local function run_http()
         api.error_body("bad_request", "player_id and chips are required."),
       }
     end
-    local seat
-    local seat_raw = j.seat
-    if seat_raw == nil or seat_raw == "" then
-      seat = c.tbl:first_available_seat()
-      if not seat then
-        return join_http_error("table_full")
-      end
-    else
-      seat = tonumber(seat_raw)
-      if not seat or seat ~= math.floor(seat) then
-        return {
-          "400 Bad Request",
-          api.error_body(
-            "bad_request",
-            "seat must be an integer between 1 and max_seats, or omitted for the first available seat."
-          ),
-        }
-      end
-      seat = math.floor(seat)
+    local kind, payload = try_join_seat(c, j)
+    if kind == "ok" then
+      return payload
     end
-    player_id = tostring(player_id)
-    local ok, err = c.tbl:seat_player({
-      seat = seat,
-      player_id = player_id,
-      chips = chips,
-    })
-    if not ok then
-      return join_http_error(err)
+    if kind == "error" then
+      return payload
     end
-    remove_player_token(c, player_id)
-    local token = generate_player_token()
-    c.player_tokens[player_id] = token
-    c.token_to_player[token] = player_id
-    return {
-      ok = true,
-      token = token,
-      table = filter_snapshot_for_player(table_snapshot(c), player_id, c.tbl),
-    }
+    return { __defer_join = true, ctx = c, json = j }
   end)
 
   srv:route("POST", "/v1/tables/:id/leave", function(req, params, s)
@@ -779,6 +895,7 @@ local function run_http()
         bb_amount = ctx.hand.bb_amount,
         running_bots = bot_count,
         zero_chips = ctx.zero_chips,
+        hidden = ctx.hidden == true,
       }
     end
     return { ok = true, tables = list }
@@ -808,6 +925,7 @@ local function run_http()
     local sb = tonumber(j.sb_amount) or 2
     local bb = tonumber(j.bb_amount) or 5
     local with_ais = j.with_ais == true
+    local hidden = j.hidden == true
 
     local zc = j.zero_chips
     if zc ~= "eject" and zc ~= "rebuy" then zc = "rebuy" end
@@ -819,9 +937,17 @@ local function run_http()
       ai_chips = tonumber(j.ai_chips) or 1000,
       zero_chips = zc,
       rebuy_amount = tonumber(j.rebuy_amount) or 500,
+      hidden = hidden,
     })
 
-    io.stderr:write("[admin] Created table: " .. tid .. " (seats=" .. max_seats .. ")\n")
+    io.stderr:write(
+      "[admin] Created table: "
+        .. tid
+        .. " (seats="
+        .. max_seats
+        .. (hidden and ", hidden" or "")
+        .. ")\n"
+    )
     return { ok = true, table_id = tid }
   end)
 

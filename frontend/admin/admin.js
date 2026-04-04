@@ -166,8 +166,14 @@
       const div = document.createElement("div");
       div.className = "table-entry" + (selectedTable === t.table_id ? " selected" : "");
       const policyLabel = t.zero_chips === "eject" ? "eject" : "rebuy";
+      const hiddenTag = t.hidden
+        ? '<span class="pill pill-muted">hidden</span>'
+        : "";
       div.innerHTML =
+        '<span class="table-entry-left">' +
         '<span class="table-entry-id">' + esc(t.table_id) + '</span>' +
+        hiddenTag +
+        '</span>' +
         '<span class="sub">' + t.seated + '/' + t.max_seats + ' seats · ' +
         'SB/BB ' + t.sb_amount + '/' + t.bb_amount + ' · ' +
         policyLabel + ' · ' + t.running_bots + ' bots</span>';
@@ -382,6 +388,7 @@
         sb_amount: parseInt($("#newSB").value, 10) || 2,
         bb_amount: parseInt($("#newBB").value, 10) || 5,
         with_ais: $("#newWithAIs").checked,
+        hidden: $("#newHidden").checked,
         zero_chips: $("#newZeroChips").value,
         rebuy_amount: parseInt($("#newRebuyAmt").value, 10) || 500,
       });

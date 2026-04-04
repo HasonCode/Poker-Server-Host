@@ -16,6 +16,8 @@
   const joinName       = $("#joinName");
   const joinChips      = $("#joinChips");
   const joinErr        = $("#joinErr");
+  const joinWait       = $("#joinWait");
+  const joinSubmit     = $("#joinSubmit");
 
   const gameArea       = $("#gameArea");
   const yourNameEl     = $("#yourName");
@@ -473,6 +475,8 @@
     const chips = parseInt(joinChips.value, 10);
     if (!name) { joinErr.textContent = "Name is required."; return; }
     if (!chips || chips < 1) { joinErr.textContent = "Chips must be at least 1."; return; }
+    if (joinWait) joinWait.classList.remove("hidden");
+    if (joinSubmit) joinSubmit.disabled = true;
     try {
       const data = await apiFetch("POST", apiBase() + "/join", { player_id: name, chips });
       playerId = name;
@@ -481,6 +485,9 @@
       startPoll();
     } catch (err) {
       joinErr.textContent = err.message;
+    } finally {
+      if (joinWait) joinWait.classList.add("hidden");
+      if (joinSubmit) joinSubmit.disabled = false;
     }
   });
 

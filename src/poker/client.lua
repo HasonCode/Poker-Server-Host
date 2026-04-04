@@ -80,7 +80,7 @@ local function err_api(http_status, decoded, raw)
   }
 end
 
-function M:_request(method, path, json_body)
+function M:_request(method, path, json_body, timeout_override)
   local http = self._http
   local ltn12 = self._ltn12
   local url = self.base_url .. path
@@ -89,7 +89,7 @@ function M:_request(method, path, json_body)
     url = url,
     method = method,
     sink = ltn12.sink.table(chunks),
-    timeout = self.timeout,
+    timeout = timeout_override or self.timeout,
   }
   local hdrs = {}
   if self.token then
@@ -147,7 +147,8 @@ function M:join_table(table_id, args)
   if args.seat ~= nil then
     body.seat = args.seat
   end
-  local data, err = self:_request("POST", path_table(table_id, "join"), body)
+  local join_timeout = math.max(self.timeout, 150)
+  local data, err = self:_request("POST", path_table(table_id, "join"), body, join_timeout)
   if data and data.token then
     self.token = data.token
   end

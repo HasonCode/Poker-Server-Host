@@ -144,7 +144,12 @@ class PokerClient:
         return self._path_table(table_id, "state")
 
     def _request_json(
-        self, method: str, path: str, json_body: Optional[Any] = None
+        self,
+        method: str,
+        path: str,
+        json_body: Optional[Any] = None,
+        *,
+        timeout: Optional[float] = None,
     ) -> Any:
         url = self.base_url + path
         data: Optional[bytes] = None
@@ -160,8 +165,9 @@ class PokerClient:
             data=data,
             headers=headers,
         )
+        t = timeout if timeout is not None else self.timeout
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=t) as resp:
                 body = resp.read()
         except urllib.error.HTTPError as e:
             raw = e.read()
@@ -214,10 +220,12 @@ class PokerClient:
         body: dict[str, Any] = {"player_id": player_id, "chips": chips}
         if seat is not None:
             body["seat"] = seat
+        join_timeout = max(self.timeout, 150.0)
         resp = self._request_json(
             "POST",
             self._path_table(table_id, "join"),
             body,
+            timeout=join_timeout,
         )
         if isinstance(resp, dict) and resp.get("token"):
             self.token = resp["token"]

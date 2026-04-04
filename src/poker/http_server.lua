@@ -96,7 +96,7 @@ local function read_http_request(client)
   }
 end
 
-local function send_json(client, status, body_tbl)
+function M.send_json_response(client, status, body_tbl)
   local body = json.encode(body_tbl)
   local head = string.format(
     "HTTP/1.1 %s\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
@@ -104,6 +104,10 @@ local function send_json(client, status, body_tbl)
     #body
   )
   client:send(head .. body)
+end
+
+local function send_json(client, status, body_tbl)
+  M.send_json_response(client, status, body_tbl)
 end
 
 local MIME = {
@@ -208,6 +212,7 @@ function M.new(opts)
     end,
     routes = opts.routes or {},
     static_root = opts.static_root,
+    tick = opts.tick,
   }
   return setmetatable(state, { __index = M })
 end
@@ -353,6 +358,19 @@ function M:serve_one()
       io.stderr:write("[poker-server] handler error: " .. tostring(res_or_err) .. "\n")
       status = "500 Internal Server Error"
       body = api.error_body("internal", "An unexpected error occurred.")
+    elseif type(res_or_err) == "table" and res_or_err.__defer_join then
+      local ctx = self.get_context()
+      if not ctx.pending_joins then
+        ctx.pending_joins = {}
+      end
+      local wait_sec = tonumber(os.getenv("POKER_JOIN_WAIT_SEC")) or 120
+      ctx.pending_joins[#ctx.pending_joins + 1] = {
+        client = client,
+        deadline = os.clock() + wait_sec,
+        ctx = res_or_err.ctx,
+        json = res_or_err.json,
+      }
+      return true
     elseif type(res_or_err) == "table" and res_or_err.__raw then
       send_custom(client, res_or_err.status or "200 OK", res_or_err.headers or {}, res_or_err.body or "")
       client:close()
@@ -376,6 +394,9 @@ function M:run_loop()
     io.stderr:write(string.format("  UI:  http://127.0.0.1:%s/\n", tostring(self.port)))
   end
   while true do
+    if self.tick then
+      self.tick(self)
+    end
     self:serve_one()
   end
 end
