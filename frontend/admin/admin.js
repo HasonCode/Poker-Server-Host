@@ -59,6 +59,7 @@
   const specPot = $("#specPot");
   const specActor = $("#specActor");
   const openTableSpectate = $("#openTableSpectate");
+  const spectateOpenFeedback = $("#spectateOpenFeedback");
 
   function esc(s) {
     const d = document.createElement("div");
@@ -564,12 +565,51 @@
   if (openTableSpectate) {
     openTableSpectate.addEventListener("click", () => {
       if (!selectedTable) {
-        spectateErr.textContent = "Select a table first.";
+        if (spectateOpenFeedback) {
+          spectateOpenFeedback.classList.add("hidden");
+          spectateOpenFeedback.textContent = "";
+        }
+        spectateErr.textContent = "Select a table in the list above first.";
         return;
       }
       spectateErr.textContent = "";
+      if (spectateOpenFeedback) {
+        spectateOpenFeedback.classList.remove("hidden");
+        spectateOpenFeedback.textContent = "Opening…";
+      }
+      openTableSpectate.disabled = true;
       const path = "/?table=" + encodeURIComponent(selectedTable) + "&spectate=1";
-      window.open(path, "_blank", "noopener,noreferrer");
+      const fullUrl = location.origin + path;
+      /* Two-arg window.open avoids popup blockers treating this as a chrome-less popup. */
+      const w = window.open(path, "_blank");
+      window.setTimeout(() => {
+        openTableSpectate.disabled = false;
+      }, 800);
+      if (!w) {
+        if (spectateOpenFeedback) {
+          spectateOpenFeedback.classList.add("hidden");
+          spectateOpenFeedback.textContent = "";
+        }
+        spectateErr.replaceChildren();
+        spectateErr.appendChild(document.createTextNode("Could not open a new tab (often blocked). Open this link: "));
+        const a = document.createElement("a");
+        a.href = fullUrl;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = fullUrl;
+        spectateErr.appendChild(a);
+        return;
+      }
+      if (spectateOpenFeedback) {
+        spectateOpenFeedback.textContent =
+          "Spectate tab opened. If it shows a login error, use this same browser to sign in at /admin, then reload the tab.";
+      }
+      window.setTimeout(() => {
+        if (spectateOpenFeedback) {
+          spectateOpenFeedback.classList.add("hidden");
+          spectateOpenFeedback.textContent = "";
+        }
+      }, 8000);
     });
   }
 

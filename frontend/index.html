@@ -40,7 +40,6 @@
         Closing this tab or navigating away removes you from the table. Closing the terminal or stopping a script does the same when using a client.
         Join requests wait until the current hand ends and a seat is free (first come, first served).
       </p>
-      <p class="sub join-wait hidden" id="joinWait">Waiting for a free seat between hands…</p>
       <p class="err" id="joinErr"></p>
     </section>
 
@@ -164,6 +163,27 @@ bot_runner.run({ strategy = decide, player_id = "LuaBot" })</code></pre>
 
     <footer class="foot"><code id="endpoint"></code></footer>
   </div>
+
+  <div
+    id="joinWaitModal"
+    class="modal-overlay hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="joinWaitTitle"
+    aria-describedby="joinWaitDesc"
+  >
+    <div class="modal-card">
+      <div class="modal-spinner" aria-hidden="true"></div>
+      <h3 id="joinWaitTitle">Waiting to join</h3>
+      <p class="sub" id="joinWaitDesc">
+        The table may be full or a hand is in progress. We’ll seat you as soon as a spot opens between hands.
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-danger" id="joinWaitCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js" defer></script>
 </body>
 </html>

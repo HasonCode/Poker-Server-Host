@@ -32,6 +32,68 @@ body {
   overflow-x: hidden;
 }
 
+/* join wait modal (deferred join) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(8, 12, 18, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.modal-overlay.hidden {
+  display: none !important;
+}
+
+body.join-modal-open {
+  overflow: hidden;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 26rem;
+  padding: 1.35rem 1.5rem 1.25rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+.modal-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.modal-card .sub {
+  margin: 0 0 1.1rem;
+  line-height: 1.45;
+}
+
+.modal-spinner {
+  width: 2.25rem;
+  height: 2.25rem;
+  margin: 0 auto 1rem;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: modal-spin 0.85s linear infinite;
+}
+
+@keyframes modal-spin {
+  to { transform: rotate(360deg); }
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 /* ── header ───────────────────────────────────────── */
 
 .top {
@@ -60,6 +122,16 @@ h1 { margin: 0; font-size: 1.3rem; font-weight: 650; letter-spacing: -0.02em; }
 h2 { margin: 0 0 0.5rem; font-size: 1rem; font-weight: 650; }
 
 .sub { margin: 0; font-size: 0.82rem; color: var(--muted); }
+
+.sub.spectate-connecting {
+  color: var(--warn);
+}
+
+.sub.spectate-error {
+  color: var(--danger);
+  max-width: 36rem;
+  line-height: 1.45;
+}
 
 .toolbar {
   display: flex;

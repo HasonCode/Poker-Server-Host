@@ -398,6 +398,22 @@ h3 {
   line-height: 1.4;
 }
 
+.spectate-open-feedback {
+  margin: 0.35rem 0 0;
+  line-height: 1.45;
+  color: var(--accent);
+  max-width: 40rem;
+}
+
+.spectate-open-feedback.hidden {
+  display: none !important;
+}
+
+#spectateErr a {
+  color: var(--accent);
+  word-break: break-all;
+}
+
 .spectate-help {
   margin: 0.5rem 0 0.75rem;
   line-height: 1.45;

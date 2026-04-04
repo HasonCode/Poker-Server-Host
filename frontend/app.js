@@ -16,8 +16,9 @@
   const joinName       = $("#joinName");
   const joinChips      = $("#joinChips");
   const joinErr        = $("#joinErr");
-  const joinWait       = $("#joinWait");
   const joinSubmit     = $("#joinSubmit");
+  const joinWaitModal  = $("#joinWaitModal");
+  const joinWaitCancel = $("#joinWaitCancel");
 
   const gameArea       = $("#gameArea");
   const yourNameEl     = $("#yourName");
@@ -78,10 +79,13 @@
     return "/v1/tables/" + encodeURIComponent(tid || tableId());
   }
 
-  async function apiFetch(method, path, body) {
+  async function apiFetch(method, path, body, signal) {
     const opts = { method, headers: { "Accept": "application/json" } };
     if (spectateMode) {
       opts.credentials = "include";
+    }
+    if (signal) {
+      opts.signal = signal;
     }
     if (playerToken) {
       opts.headers["X-Player-Token"] = playerToken;
@@ -93,15 +97,41 @@
     const res = await fetch(path, opts);
     const text = await res.text();
     let data;
-    try { data = JSON.parse(text); } catch { throw new Error("Invalid JSON from server"); }
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = undefined;
+    }
     if (!res.ok) {
-      const msg = data?.error?.message || res.statusText;
-      const err = new Error(msg);
-      err.apiCode = data?.error?.code;
+      const msg =
+        (data && data.error && (data.error.message || data.error.code)) ||
+        (data === undefined && text && text.length ? text.trim().slice(0, 400) : "") ||
+        res.statusText ||
+        "Request failed";
+      const err = new Error(msg || res.statusText);
+      err.apiCode = data && data.error ? data.error.code : undefined;
       err.httpStatus = res.status;
       throw err;
     }
+    if (data === undefined) {
+      throw new Error("Invalid JSON from server");
+    }
     return data;
+  }
+
+  let joinAbortController = null;
+
+  function showJoinWaitModal() {
+    if (!joinWaitModal) return;
+    joinWaitModal.classList.remove("hidden");
+    document.body.classList.add("join-modal-open");
+    if (joinWaitCancel) joinWaitCancel.focus();
+  }
+
+  function hideJoinWaitModal() {
+    if (!joinWaitModal) return;
+    joinWaitModal.classList.add("hidden");
+    document.body.classList.remove("join-modal-open");
   }
 
   /* ── card rendering ───────────────────────────────── */
@@ -415,10 +445,10 @@
     } catch (e) {
       let msg = e.message;
       if (spectateMode && (e.apiCode === "unauthorized" || e.httpStatus === 401 || e.httpStatus === 403 || e.httpStatus === 503)) {
-        msg = "Admin login required — open /admin and sign in, then reload this page.";
+        msg = "Admin login required — open /admin in this browser, sign in, then reload this page.";
       }
       connState.textContent = "Error: " + msg;
-      connState.className = "sub";
+      connState.className = "sub spectate-error";
     }
   }
 
@@ -502,19 +532,56 @@
     const chips = parseInt(joinChips.value, 10);
     if (!name) { joinErr.textContent = "Name is required."; return; }
     if (!chips || chips < 1) { joinErr.textContent = "Chips must be at least 1."; return; }
-    if (joinWait) joinWait.classList.remove("hidden");
+    if (joinAbortController) {
+      joinAbortController.abort();
+    }
+    joinAbortController = new AbortController();
+    const ac = joinAbortController;
     if (joinSubmit) joinSubmit.disabled = true;
+    showJoinWaitModal();
     try {
-      const data = await apiFetch("POST", apiBase() + "/join", { player_id: name, chips });
+      const data = await apiFetch("POST", apiBase() + "/join", { player_id: name, chips }, ac.signal);
       playerId = name;
       playerToken = data.token || null;
       renderAll(data.table || {});
       startPoll();
     } catch (err) {
-      joinErr.textContent = err.message;
+      const aborted = err.name === "AbortError" || err.code === 20;
+      if (aborted) {
+        joinErr.textContent = "Join cancelled.";
+      } else {
+        joinErr.textContent = err.message;
+      }
     } finally {
-      if (joinWait) joinWait.classList.add("hidden");
+      hideJoinWaitModal();
       if (joinSubmit) joinSubmit.disabled = false;
+      if (joinAbortController === ac) {
+        joinAbortController = null;
+      }
+    }
+  });
+
+  if (joinWaitCancel) {
+    joinWaitCancel.addEventListener("click", () => {
+      if (joinAbortController) {
+        joinAbortController.abort();
+      }
+    });
+  }
+
+  if (joinWaitModal) {
+    joinWaitModal.addEventListener("click", (ev) => {
+      if (ev.target === joinWaitModal && joinAbortController) {
+        joinAbortController.abort();
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (!joinWaitModal || joinWaitModal.classList.contains("hidden")) return;
+    if (joinAbortController) {
+      joinAbortController.abort();
     }
   });
 
@@ -693,6 +760,8 @@
     if (leaveBtn) leaveBtn.classList.add("hidden");
     if (actionPanel) actionPanel.classList.add("hidden");
     if (botPanel) botPanel.classList.add("hidden");
+    connState.textContent = "Spectate: connecting…";
+    connState.className = "sub spectate-connecting";
   }
 
   loadTableList().then(() => {
