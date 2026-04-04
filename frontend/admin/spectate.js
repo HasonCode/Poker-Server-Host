@@ -8,6 +8,7 @@
   const loginGateErr = $("#loginGateErr");
   const spectateMain = $("#spectateMain");
   const tableSelect = $("#tableSelect");
+  const spectateRefreshBtn = $("#spectateRefreshBtn");
   const endpointEl = $("#endpointEl");
 
   const statusPill = $("#statusPill");
@@ -342,6 +343,33 @@
     }
   }
 
+  async function manualRefresh() {
+    const btn = spectateRefreshBtn;
+    if (btn) btn.disabled = true;
+    barStatus.textContent = "Refreshing…";
+    barStatus.className = "sub";
+    try {
+      await loadTables();
+      updateUrlTable();
+      const tid = currentTableId();
+      if (tid) {
+        await loadSnapshot(tid);
+      } else {
+        barStatus.textContent = "Table list updated. Select a table.";
+        endpointEl.textContent = "—";
+      }
+    } catch (e) {
+      if (e.httpStatus === 401) {
+        showLoginGate("");
+        return;
+      }
+      barStatus.textContent = "Error: " + e.message;
+      barStatus.className = "sub spectate-error";
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function loadTables() {
     const res = await apiFetch("GET", "/admin/api/tables");
     const list = (res && res.tables) || [];
@@ -429,6 +457,12 @@
       updateUrlTable();
       startPoll();
     });
+
+    if (spectateRefreshBtn) {
+      spectateRefreshBtn.addEventListener("click", () => {
+        manualRefresh();
+      });
+    }
   }
 
   init();
