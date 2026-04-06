@@ -140,6 +140,8 @@ local function create_server_state()
     tables = {
       demo = create_table_context("demo", 10, { with_ais = true }),
       players = create_table_context("players", 10, {}),
+      -- Dedicated empty table for LLM / bot clients (omitted from public GET /v1/tables).
+      llm_bots = create_table_context("llm_bots", 10, { hidden = true }),
     },
     pending_joins = {},
   }
