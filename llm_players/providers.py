@@ -50,6 +50,7 @@ def monologue_openai_compat(
     model: str,
     display_name: str,
     extra_headers: dict[str, str] | None = None,
+    user_message: str | None = None,
 ) -> str:
     url = _normalize_base(base_url) + "/chat/completions"
     headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -59,15 +60,15 @@ def monologue_openai_compat(
         headers["Authorization"] = f"Bearer {api_key}"
         if extra_headers:
             headers.update(extra_headers)
+    um = user_message or (
+        f"You are seated as {display_name}. Write your internal monologue now."
+    )
     body = {
         "model": model,
         "temperature": 0.9,
         "messages": [
             {"role": "system", "content": prompts.MONOLOGUE_SYSTEM},
-            {
-                "role": "user",
-                "content": f"You are seated as {display_name}. Write your internal monologue now.",
-            },
+            {"role": "user", "content": um},
         ],
     }
     data = _post_json(url, headers, body)
@@ -78,23 +79,27 @@ def monologue_openai_compat(
     return str(msg.get("content") or "").strip()
 
 
-def monologue_anthropic(*, api_key: str, model: str, display_name: str) -> str:
+def monologue_anthropic(
+    *,
+    api_key: str,
+    model: str,
+    display_name: str,
+    user_message: str | None = None,
+) -> str:
     url = "https://api.anthropic.com/v1/messages"
     headers = {
         "Content-Type": "application/json",
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
     }
+    um = user_message or (
+        f"You are seated as {display_name}. Write your internal monologue now."
+    )
     body = {
         "model": model,
         "max_tokens": 1024,
         "system": prompts.MONOLOGUE_SYSTEM,
-        "messages": [
-            {
-                "role": "user",
-                "content": f"You are seated as {display_name}. Write your internal monologue now.",
-            }
-        ],
+        "messages": [{"role": "user", "content": um}],
     }
     data = _post_json(url, headers, body)
     blocks = data.get("content") or []

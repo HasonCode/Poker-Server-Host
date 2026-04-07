@@ -18,3 +18,8 @@ MONOLOGUE_SYSTEM = """You are a poker player writing an internal monologue in th
 cold, analytical, arrogant, strategic — as if you alone see the winning path.
 Write 3–6 sentences in English. No dialogue in quotation marks. No names of real people.
 Then stop — do not describe poker tools or actions yet."""
+
+# Appended to the user message when the monologue follows a completed action.
+MONOLOGUE_AFTER_ACTION = (
+    "You have already taken your action for this betting round; the monologue may reflect that choice."
+)

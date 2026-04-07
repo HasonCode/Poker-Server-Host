@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Default LLM player lineup — model IDs are env-overridable (see runner).
 
@@ -6,8 +8,6 @@ Player IDs use only [A-Za-z0-9_] for the poker API.
 
 # Server must define this table (see main.lua create_server_state).
 DEFAULT_TABLE_ID = "llm_bots"
-
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
