@@ -49,6 +49,9 @@ function M.run_until_human(ctx)
   local max_steps = 500
 
   if hand.status == "idle" then
+    if ctx.manual_start_only then
+      return
+    end
     local first, perr = hand:peek_first_actor(tbl)
     if not first then
       return

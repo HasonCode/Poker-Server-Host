@@ -1,0 +1,122 @@
+/* LLM spectate page */
+
+.toolbar-table input[type="text"] {
+  min-width: 10rem;
+}
+
+.llm-live-field {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.llm-deal-btn:not(.hidden) {
+  font-weight: 600;
+}
+
+.llm-step-btn:not(.hidden) {
+  font-weight: 600;
+}
+
+/* Monologue feed — distinct hues, light text on dark table UI */
+.llm-monologue-panel h2 {
+  margin-bottom: 0.35rem;
+}
+
+.llm-monologue-hint {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.85rem;
+}
+
+.monologue-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.monologue-entry {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border-left: 4px solid var(--mono-border, #64748b);
+  background: rgba(15, 23, 42, 0.65);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+
+.monologue-head {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.5rem;
+  opacity: 0.95;
+}
+
+.monologue-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  font-size: 0.9rem;
+}
+
+.llm-mono-gpt_5_4 {
+  --mono-border: #22d3ee;
+  color: #a5f3fc;
+}
+.llm-mono-claude_4_6_opus {
+  --mono-border: #fb923c;
+  color: #fed7aa;
+}
+.llm-mono-gemini_3_1 {
+  --mono-border: #60a5fa;
+  color: #bfdbfe;
+}
+.llm-mono-llama_4 {
+  --mono-border: #a78bfa;
+  color: #ddd6fe;
+}
+.llm-mono-deepseek_v3_2 {
+  --mono-border: #4ade80;
+  color: #bbf7d0;
+}
+.llm-mono-mistral_large_3 {
+  --mono-border: #f472b6;
+  color: #fbcfe8;
+}
+.llm-mono-grok_ai {
+  --mono-border: #facc15;
+  color: #fef9c3;
+}
+.llm-mono-default {
+  --mono-border: #94a3b8;
+  color: #e2e8f0;
+}
+
+.llm-empty-hint {
+  margin-bottom: 0.75rem;
+  border-left: 3px solid var(--accent, #6b8cff);
+}
+
+.llm-empty-hint code {
+  font-size: 0.85em;
+}
+
+.fs-llm-id {
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1.2;
+  margin-top: 0.15rem;
+}
+
+.fs-llm-badge {
+  display: inline-block;
+  margin-top: 0.2rem;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  background: rgba(107, 140, 255, 0.2);
+  color: var(--text);
+}

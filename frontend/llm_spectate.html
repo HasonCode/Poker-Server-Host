@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LLM table spectate</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/admin/admin.css" />
+  <link rel="stylesheet" href="/admin/spectate-page.css" />
+  <link rel="stylesheet" href="/llm_spectate.css" />
+</head>
+<body>
+  <div class="app spectate-app" id="llmSpectateApp">
+    <header class="top">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">♠</span>
+        <div>
+          <h1>LLM table spectate</h1>
+          <p class="sub" id="barStatus">Enter password to view all cards</p>
+        </div>
+      </div>
+      <div class="toolbar spectate-toolbar">
+        <label class="field toolbar-table">
+          <span>Table ID</span>
+          <input type="text" id="tableIdInput" value="llm_bots" spellcheck="false" autocomplete="off" />
+        </label>
+        <label class="field cb-field llm-live-field">
+          <input type="checkbox" id="liveUpdates" checked />
+          <span>Live (1.5s)</span>
+        </label>
+        <span class="sub" id="pollHint">Uncheck Live to refresh only via Next snapshot</span>
+        <button type="button" class="btn btn-sm btn-accent" id="spectateRefreshBtn" title="Fetch table state once (when Live is off)">
+          Next snapshot
+        </button>
+        <button type="button" class="btn btn-sm btn-accent llm-deal-btn hidden" id="startHandBtn" title="Deal hole cards to all seated players (spectator shows all hole cards)">
+          Deal cards
+        </button>
+        <button type="button" class="btn btn-sm btn-accent llm-step-btn hidden" id="llmStepBtn" title="Run the current actor LLM once: tools + action + transcript monologue (server runs python3 -m llm_players --single-step)">
+          Run AI turn
+        </button>
+        <button type="button" class="btn btn-sm" id="logoutSpectateBtn" title="Clear saved password">
+          Lock
+        </button>
+        <a href="/" class="btn btn-sm">Public UI</a>
+      </div>
+    </header>
+
+    <section class="panel login-panel" id="passwordGate">
+      <h2>Spectate password</h2>
+      <p class="sub">
+        Public page — enter the shared spectate password to load full table state (all hole cards).
+        Default for local runs is <strong>1234</strong> unless the server sets <code>POKER_LLM_SPECTATE_PASSWORD</code>.
+        After LLMs join (<code>python3 -m llm_players --table llm_bots</code>), use <strong>Deal cards</strong> in the toolbar to start the hand; the table does not auto-deal.
+      </p>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="passwordInput" autocomplete="current-password" />
+      </label>
+      <button type="button" class="btn btn-accent" id="passwordSubmit">Unlock spectate</button>
+      <p class="err" id="passwordGateErr"></p>
+    </section>
+
+    <div id="spectateMain" class="hidden">
+      <section class="panel your-panel spectate-strip">
+        <h2>LLM spectator</h2>
+        <p class="sub" id="stripMeta">Step mode: use Next snapshot to advance. Turn on Live for auto-updates.</p>
+      </section>
+
+      <section class="panel llm-monologue-panel hidden" id="monologuePanel">
+        <h2>Monologue <span class="sub">(Run AI turn)</span></h2>
+        <p class="sub llm-monologue-hint" id="monologueHint">
+          Latest internal monologue from each Run AI turn appears below — one color per model.
+        </p>
+        <div id="monologueFeed" class="monologue-feed" aria-live="polite"></div>
+      </section>
+
+      <section class="panel llm-empty-hint hidden" id="emptyTableHint">
+        <p><strong>No players seated on this table.</strong> The server never auto-seats LLMs — the table stays empty until the LLM client joins.</p>
+        <p class="sub">
+          Run from the repo (with API keys set): <code>python3 -m llm_players --table llm_bots</code>
+          (default is step mode in the terminal; <code>--auto</code> runs hands without prompts). When at least two players are seated, click <strong>Deal cards</strong> to start the hand and show all hole cards here.
+        </p>
+      </section>
+
+      <section class="table-panel">
+        <div class="hand-bar panel">
+          <span class="pill" id="statusPill">idle</span>
+          <span class="stat-inline"><b>Street</b> <span id="streetVal">—</span></span>
+          <span class="stat-inline highlight"><b>Pot</b> <span id="potVal" class="mono">0</span></span>
+          <span class="stat-inline"><b>Bet</b> <span id="betVal" class="mono">0</span></span>
+          <span class="stat-inline"><b>Min raise</b> <span id="minRaiseVal" class="mono">—</span></span>
+        </div>
+        <div class="felt-wrap" id="feltWrap">
+          <img src="/pokertable.png" class="felt-img" draggable="false" alt="Poker table" />
+          <div class="felt-pot">
+            <div class="felt-pot-label">POT</div>
+            <div class="felt-pot-val mono" id="feltPotVal">0</div>
+          </div>
+          <div class="felt-board" id="community"></div>
+          <div class="felt-seat" data-seat="1"></div>
+          <div class="felt-seat" data-seat="2"></div>
+          <div class="felt-seat" data-seat="3"></div>
+          <div class="felt-seat" data-seat="4"></div>
+          <div class="felt-seat" data-seat="5"></div>
+          <div class="felt-seat" data-seat="6"></div>
+          <div class="felt-seat" data-seat="7"></div>
+          <div class="felt-seat" data-seat="8"></div>
+          <div class="felt-seat" data-seat="9"></div>
+          <div class="felt-seat" data-seat="10"></div>
+        </div>
+        <div class="winners hidden" id="winners"></div>
+      </section>
+
+      <section class="panel log-panel">
+        <h2>Action log</h2>
+        <ol class="log" id="actionLog"></ol>
+      </section>
+
+      <footer class="foot"><code id="endpointEl"></code></footer>
+    </div>
+  </div>
+  <script src="/llm_spectate.js"></script>
+</body>
+</html>

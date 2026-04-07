@@ -255,6 +255,20 @@ function M:match_handler(method, path)
       return h, { table_id = id }
     end
   end
+  id = path:match("^/v1/tables/([^/]+)/start%-hand$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/start-hand"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
+  id = path:match("^/v1/tables/([^/]+)/llm%-step$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/llm-step"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
   id = path:match("^/v1/tables/([^/]+)/bot/start$")
   if id and method == "POST" then
     local h = self.routes["POST /v1/tables/:id/bot/start"]
@@ -395,10 +409,17 @@ function M:run_loop()
     io.stderr:write(string.format("  UI:  http://127.0.0.1:%s/\n", tostring(self.port)))
   end
   while true do
+    -- Accept and finish HTTP handlers first so e.g. multiple /join requests complete in one
+    -- batch before tick() runs table_snapshot / start_hand (otherwise join #3+ can defer).
+    for _ = 1, 64 do
+      local ok = self:serve_one()
+      if not ok then
+        break
+      end
+    end
     if self.tick then
       self.tick(self)
     end
-    self:serve_one()
   end
 end
 

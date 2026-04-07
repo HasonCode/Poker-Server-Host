@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import ssl
+import sys
 import urllib.error
 import urllib.request
 from typing import Any, Callable
@@ -159,7 +160,12 @@ def decide_openai_compat(
         lambda name, args: pt.execute_tool(name, state, player_id, args)
     )
 
-    for _ in range(max_rounds):
+    for rnd in range(max_rounds):
+        sys.stderr.write(
+            f"[llm-step] decide round {rnd + 1}/{max_rounds} → POST chat/completions "
+            f"(each call can take up to 120s on slow providers)…\n"
+        )
+        sys.stderr.flush()
         body: dict[str, Any] = {
             "model": model,
             "temperature": 0.3,

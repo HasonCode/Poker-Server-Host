@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -253,11 +255,46 @@ def _print_step_banner(
     sys.stdout.flush()
 
 
-def _interactive_step(phase: str, pc: PlayerConfig, detail: str, stop: threading.Event) -> bool:
+def _compact_table_line(state: dict, player_by_id: dict[str, PlayerConfig]) -> str:
+    h = state.get("hand") or {}
+    st = h.get("status") or "?"
+    street = h.get("street") or "?"
+    pot = h.get("pot")
+    pid = _actor_pid_from_state(state)
+    if pid and pid in player_by_id:
+        actor = f"to_act={player_by_id[pid].player_id}"
+    elif pid:
+        actor = f"to_act={pid}"
+    else:
+        actor = "to_act=—"
+    return f"[table] status={st} street={street} pot={pot} {actor}"
+
+
+def _table_status_poll(
+    client: PokerClient,
+    table_id: str,
+    player_by_id: dict[str, PlayerConfig],
+    stop: threading.Event,
+    interval: float,
+) -> None:
+    while not stop.is_set():
+        try:
+            state = client.get_table_state(table_id)
+        except Exception as e:
+            sys.stderr.write(f"[table poll] {e}\n")
+            if stop.wait(interval):
+                break
+            continue
+        sys.stderr.write(_compact_table_line(state, player_by_id) + "\n")
+        if stop.wait(interval):
+            break
+
+
+def _interactive_next_llm_move(pc: PlayerConfig, stop: threading.Event) -> bool:
     sys.stdout.write(
-        f"\n{phase} — {pc.display_name} ({pc.player_id})\n"
-        f"  {detail}\n"
-        f"  Enter = continue  ·  q = quit: "
+        f"\n[Next LLM move] — {pc.display_name} ({pc.player_id})\n"
+        f"  Runs decide (tools) → send action → monologue in one step.\n"
+        f"  Enter = run  ·  q = quit: "
     )
     sys.stdout.flush()
     try:
@@ -269,6 +306,192 @@ def _interactive_step(phase: str, pc: PlayerConfig, detail: str, stop: threading
     if line.strip().lower() in ("q", "quit", "exit"):
         return False
     return True
+
+
+def _join_players_parallel(
+    players: tuple[PlayerConfig, ...],
+    base_url: str,
+    table_id: str,
+    chips: int,
+) -> tuple[list[PokerClient], list[PlayerConfig]]:
+    """Join all players with keys concurrently so the server can accept every /join before tick() starts a hand."""
+    to_join: list[PlayerConfig] = []
+    for pc in players:
+        key = os.environ.get(pc.env_api_key) or ""
+        if not key.strip():
+            sys.stderr.write(
+                f"Skipping {pc.player_id}: set {pc.env_api_key} in the environment.\n"
+            )
+            continue
+        to_join.append(pc)
+
+    if not to_join:
+        return [], []
+
+    def _one(pc: PlayerConfig) -> tuple[str, PokerClient | None, Exception | None]:
+        c = PokerClient(base_url, timeout=120.0)
+        try:
+            c.join_table(table_id, player_id=pc.player_id, chips=chips)
+            return pc.player_id, c, None
+        except (PokerError, TransportError) as e:
+            return pc.player_id, None, e
+
+    results: dict[str, tuple[PokerClient | None, Exception | None]] = {}
+    n = len(to_join)
+    with ThreadPoolExecutor(max_workers=max(1, n)) as ex:
+        futures = {ex.submit(_one, pc): pc for pc in to_join}
+        for fut in as_completed(futures):
+            pid, c, err = fut.result()
+            results[pid] = (c, err)
+
+    clients: list[PokerClient] = []
+    joined: list[PlayerConfig] = []
+    for pc in to_join:
+        c, err = results[pc.player_id]
+        if err is not None:
+            sys.stderr.write(f"Join failed for {pc.player_id}: {err}\n")
+            continue
+        if c is not None:
+            clients.append(c)
+            joined.append(pc)
+    return clients, joined
+
+
+def _emit_step_json(d: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(d))
+    sys.stdout.flush()
+
+
+def _fail_step(code: str, message: str) -> None:
+    sys.stderr.write(f"[llm-step] FAIL {code}: {message}\n")
+    sys.stderr.flush()
+    _emit_step_json({"ok": False, "error": message, "error_code": code})
+    sys.exit(1)
+
+
+def _step_log(msg: str) -> None:
+    sys.stderr.write(f"[llm-step] {msg}\n")
+    sys.stderr.flush()
+
+
+def run_single_step(args: argparse.Namespace) -> None:
+    """One LLM turn: rejoin all keyed players, decide + action + monologue for the current actor; JSON on stdout."""
+    _step_log(
+        f"start table={args.table!r} url={args.url!r} out_dir={os.path.abspath(args.out_dir)!r}"
+    )
+    out_dir = os.path.abspath(args.out_dir)
+    game_id = resolve_game_id(out_dir, args.new_game)
+    recorder = GameRecorder(game_id, out_dir)
+    recorder.ensure_headers()
+
+    players: tuple[PlayerConfig, ...] = tuple(DEFAULT_PLAYERS)
+    if args.players:
+        wanted = set(args.players.split(","))
+        players = tuple(p for p in DEFAULT_PLAYERS if p.player_id in wanted)
+
+    if not players:
+        _fail_step("no_players", "No players selected.")
+
+    base_url = args.url
+    table_id = args.table
+    env = os.environ
+
+    clients, joined = _join_players_parallel(players, base_url, table_id, args.chips)
+    if not clients:
+        _fail_step("join_failed", "No players could join (keys / server).")
+
+    _step_log(f"joined {len(joined)} player(s): {[p.player_id for p in joined]!r}")
+    player_by_id = {pc.player_id: pc for pc in joined}
+    pid_to_client = {pc.player_id: c for pc, c in zip(joined, clients)}
+    probe = clients[0]
+
+    try:
+        state = probe.get_table_state(table_id)
+    except (PokerError, TransportError) as e:
+        _fail_step("state_error", str(e))
+
+    h = state.get("hand") or {}
+    st = h.get("status")
+    _step_log(f"hand.status={st!r} street={h.get('street')!r} action_to_seat={h.get('action_to_seat')!r}")
+    if st != "active":
+        _fail_step("no_active_hand", "No active hand — use Deal cards on spectate first.")
+
+    pid = _actor_pid_from_state(state)
+    if not pid:
+        _fail_step("no_actor", "No player to act.")
+    if pid not in player_by_id:
+        _fail_step(
+            "not_llm_actor",
+            f"Current actor is {pid!r}, not one of the configured LLM players for this run.",
+        )
+
+    _step_log(f"actor={pid!r} (will call decide + action + monologue)")
+    act_client = pid_to_client[pid]
+    try:
+        state = act_client.get_table_state(table_id)
+    except (PokerError, TransportError) as e:
+        _fail_step("state_error", str(e))
+
+    pc = player_by_id[pid]
+    key = env.get(pc.env_api_key) or ""
+    model = resolve_model_env(pc, env)
+    h2 = state.get("hand") or {}
+    hand_ctx = f"{h2.get('street') or '?'} pot={h2.get('pot')}"
+    _step_log(f"model={model!r} context={hand_ctx!r}")
+
+    _step_log("calling LLM decide() (tools + chat) — may take a while…")
+    try:
+        action, amount = _decide(pc, key, model, state)
+    except Exception as e:
+        sys.stderr.write(f"[{pc.player_id}] decide error: {e}\n")
+        action, amount = "fold", None
+
+    action = (action or "fold").lower()
+    _step_log(f"decide -> action={action!r} amount={amount!r}")
+    try:
+        act_client.send_action(
+            table_id,
+            player_id=pc.player_id,
+            action=action,
+            amount=amount,
+            queue=False,
+        )
+    except PokerError as e:
+        sys.stderr.write(f"[{pc.player_id}] action {action} failed: {e}\n")
+        try:
+            act_client.send_action(
+                table_id,
+                player_id=pc.player_id,
+                action="fold",
+                queue=False,
+            )
+        except Exception:
+            pass
+        action, amount = "fold", None
+
+    _step_log("send_action OK; calling monologue…")
+    mono = ""
+    try:
+        um = _monologue_user_message_after_play(pc, hand_ctx, action, amount)
+        mono = _monologue(pc, key, model, user_message=um)
+        recorder.append_monologue(pc.display_name, pc.player_id, hand_ctx, mono)
+        _step_log(f"monologue length={len(mono)} chars")
+    except Exception as e:
+        sys.stderr.write(f"[{pc.player_id}] monologue error: {e}\n")
+
+    _step_log("emitting JSON on stdout (single line)")
+    _emit_step_json(
+        {
+            "ok": True,
+            "player_id": pc.player_id,
+            "display_name": pc.display_name,
+            "action": action,
+            "amount": amount,
+            "transcript": recorder.transcript_path,
+            "monologue": mono,
+        }
+    )
+    sys.exit(0)
 
 
 def _poll_until_llm_turn(
@@ -292,7 +515,7 @@ def _poll_until_llm_turn(
 
 
 def run_step(args: argparse.Namespace) -> None:
-    """Interactive stepping: no LLM API calls until you confirm each phase (saves tokens)."""
+    """Interactive stepping: one Enter per LLM turn (decide + action + monologue); optional table poll on stderr."""
     out_dir = os.path.abspath(args.out_dir)
     game_id = resolve_game_id(out_dir, args.new_game)
     recorder = GameRecorder(game_id, out_dir)
@@ -318,24 +541,7 @@ def run_step(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGTERM, _sig)
 
     shared: dict[str, Any] = {"hand_label": "—", "hand_seq": 0, "last_pot_active": 0}
-    clients: list[PokerClient] = []
-    joined: list[PlayerConfig] = []
-
-    for pc in players:
-        key = os.environ.get(pc.env_api_key) or ""
-        if not key.strip():
-            sys.stderr.write(
-                f"Skipping {pc.player_id}: set {pc.env_api_key} in the environment.\n"
-            )
-            continue
-        c = PokerClient(base_url, timeout=120.0)
-        try:
-            c.join_table(table_id, player_id=pc.player_id, chips=args.chips)
-        except (PokerError, TransportError) as e:
-            sys.stderr.write(f"Join failed for {pc.player_id}: {e}\n")
-            continue
-        clients.append(c)
-        joined.append(pc)
+    clients, joined = _join_players_parallel(players, base_url, table_id, args.chips)
 
     if not clients:
         sys.stderr.write("No players joined — check API keys and table availability.\n")
@@ -354,10 +560,18 @@ def run_step(args: argparse.Namespace) -> None:
     watcher.start()
 
     poll_client = clients[0]
+    if not args.no_table_poll:
+        poller = threading.Thread(
+            target=_table_status_poll,
+            args=(poll_client, table_id, player_by_id, stop, 1.5),
+            name="table_status_poll",
+            daemon=True,
+        )
+        poller.start()
+
     sys.stdout.write(
-        "\n*** Step mode (default) — no LLM calls until you press Enter on each prompt. ***\n"
-        "*** Order per turn: (1) PLAY — tools + action  (2) MONOLOGUE  (3) NEXT — next actor ***\n"
-        "*** Use --auto for continuous multi-threaded play. ***\n\n"
+        "\n*** Step mode — stderr logs table status (~1.5s); press Enter once per LLM to run play + monologue. ***\n"
+        "*** Use --auto for continuous multi-threaded play. Use --no-table-poll to silence table lines. ***\n\n"
     )
     sys.stderr.write(
         f"[step mode] game_id={game_id} — transcript {recorder.transcript_path} — "
@@ -374,12 +588,7 @@ def run_step(args: argparse.Namespace) -> None:
         shared["hand_label"] = f"Hand {shared.get('hand_seq', 0)} · {st_name}"
         _print_step_banner(pc, state, shared)
 
-        if not _interactive_step(
-            "[1/3 PLAY]",
-            pc,
-            "Calls the LLM (tools + submit_poker_action) and sends the move to the server.",
-            stop,
-        ):
+        if not _interactive_next_llm_move(pc, stop):
             break
 
         state = poll_client.get_table_state(table_id)
@@ -415,28 +624,12 @@ def run_step(args: argparse.Namespace) -> None:
 
         ctx = shared.get("hand_label") or "unknown street"
 
-        if not _interactive_step(
-            "[2/3 MONOLOGUE]",
-            pc,
-            "Calls the LLM for the Death Note–style monologue after this play.",
-            stop,
-        ):
-            break
-
         try:
             um = _monologue_user_message_after_play(pc, ctx, action, amount)
             mono = _monologue(pc, key, model, user_message=um)
             recorder.append_monologue(pc.display_name, pc.player_id, ctx, mono)
         except Exception as e:
             sys.stderr.write(f"[{pc.player_id}] monologue error: {e}\n")
-
-        if not _interactive_step(
-            "[3/3 NEXT]",
-            pc,
-            "Done with this turn. Wait for the next LLM actor (or continue polling).",
-            stop,
-        ):
-            break
 
     time.sleep(0.2)
 
@@ -468,30 +661,17 @@ def run_auto(args: argparse.Namespace) -> None:
 
     shared: dict[str, Any] = {"hand_label": "—", "hand_seq": 0, "last_pot_active": 0}
 
+    clients, joined = _join_players_parallel(players, base_url, table_id, args.chips)
     threads: list[threading.Thread] = []
-    clients: list[PokerClient] = []
-
-    for pc in players:
-        key = os.environ.get(pc.env_api_key) or ""
-        if not key.strip():
-            sys.stderr.write(
-                f"Skipping {pc.player_id}: set {pc.env_api_key} in the environment.\n"
+    for pc, c in zip(joined, clients):
+        threads.append(
+            threading.Thread(
+                target=_player_loop,
+                args=(pc, c, table_id, recorder, shared, stop),
+                name=pc.player_id,
+                daemon=True,
             )
-            continue
-        c = PokerClient(base_url, timeout=120.0)
-        try:
-            c.join_table(table_id, player_id=pc.player_id, chips=args.chips)
-        except (PokerError, TransportError) as e:
-            sys.stderr.write(f"Join failed for {pc.player_id}: {e}\n")
-            continue
-        clients.append(c)
-        t = threading.Thread(
-            target=_player_loop,
-            args=(pc, c, table_id, recorder, shared, stop),
-            name=pc.player_id,
-            daemon=True,
         )
-        threads.append(t)
 
     if not threads:
         sys.stderr.write("No players joined — check API keys and table availability.\n")
@@ -519,6 +699,9 @@ def run_auto(args: argparse.Namespace) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.single_step:
+        run_single_step(args)
+        return
     if args.auto:
         run_auto(args)
     else:
@@ -529,9 +712,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Run configured LLM players against the poker server. "
-            "Default: step mode — press Enter to run each LLM play, then monologue, then next turn "
-            "(no API calls until prompted). Use --auto for continuous play."
+            "Default: step mode — press Enter once per LLM turn to run play + monologue "
+            "(table status on stderr ~1.5s). Use --auto for continuous play."
         ),
+    )
+    p.add_argument(
+        "--single-step",
+        action="store_true",
+        help="Run one LLM turn (tools + action + monologue) if it is an LLM's turn, then exit. Prints JSON to stdout.",
     )
     p.add_argument(
         "--auto",
@@ -563,6 +751,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--players",
         default="",
         help="Comma-separated player_ids to include (default: all seven)",
+    )
+    p.add_argument(
+        "--no-table-poll",
+        action="store_true",
+        help="Step mode: do not print periodic table status lines to stderr.",
     )
     return p
 

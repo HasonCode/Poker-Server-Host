@@ -91,6 +91,10 @@ local function create_table_context(id, max_seats, opts)
     rebuy_amount = opts.rebuy_amount or 500,
     bust_counts = {}, -- player_id -> times reached 0 chips at end of hand (eject or rebuy)
     hidden = opts.hidden == true, -- if true, omitted from GET /v1/tables public list
+    -- If true, POST /join may seat while a hand is active (player enters next hand only).
+    allow_mid_hand_join = opts.allow_mid_hand_join == true,
+    -- If true, do not auto-deal when idle; spectator (or API) must POST start-hand first.
+    manual_start_only = opts.manual_start_only == true,
   }
 end
 
@@ -141,7 +145,11 @@ local function create_server_state()
       demo = create_table_context("demo", 10, { with_ais = true }),
       players = create_table_context("players", 10, {}),
       -- Dedicated empty table for LLM / bot clients (omitted from public GET /v1/tables).
-      llm_bots = create_table_context("llm_bots", 10, { hidden = true }),
+      llm_bots = create_table_context("llm_bots", 10, {
+        hidden = true,
+        allow_mid_hand_join = true,
+        manual_start_only = true,
+      }),
     },
     pending_joins = {},
   }
@@ -315,6 +323,7 @@ local function table_snapshot(ctx)
   local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue)
   snap.zero_chips = ctx.zero_chips
   snap.rebuy_amount = ctx.rebuy_amount
+  snap.manual_start_only = ctx.manual_start_only == true
   return snap
 end
 
@@ -367,6 +376,15 @@ local function run_http()
     local player_id = tostring(j.player_id)
     local chips = tonumber(j.chips)
     if c.tbl:seat_for_player(player_id) then
+      local tok = c.player_tokens[player_id]
+      if tok then
+        return "ok", {
+          ok = true,
+          token = tok,
+          rejoined = true,
+          table = filter_snapshot_for_player(table_snapshot(c), player_id, c.tbl),
+        }
+      end
       return "error", join_http_error("already_seated")
     end
     local seat_raw = j.seat
@@ -392,7 +410,7 @@ local function run_http()
         return "defer"
       end
     end
-    if c.hand.status ~= "idle" then
+    if c.hand.status ~= "idle" and not c.allow_mid_hand_join then
       return "defer"
     end
     local ok, err = c.tbl:seat_player({
@@ -456,9 +474,8 @@ local function run_http()
 
   local function process_pending_joins(srv)
     local s = srv.get_context()
-    for _, ctx in pairs(s.tables) do
-      table_snapshot(ctx)
-    end
+    -- Process deferred join HTTP waiters first so seats fill while the hand is still idle,
+    -- before table_snapshot runs ai.run_until_human / start_hand.
     local i = 1
     while i <= #s.pending_joins do
       if process_pending_join_entry(s.pending_joins[i]) then
@@ -466,6 +483,9 @@ local function run_http()
       else
         i = i + 1
       end
+    end
+    for _, ctx in pairs(s.tables) do
+      table_snapshot(ctx)
     end
   end
 
@@ -494,7 +514,38 @@ local function run_http()
   end
 
   --- Must be defined before routes that call it. Admin cookie OR POKER_SPECTATE_SECRET (header / query).
+  --- OR shared password for public LLM spectate page (default 1234; override POKER_LLM_SPECTATE_PASSWORD).
   local function spectate_authorized(req)
+    do
+      local expected = os.getenv("POKER_LLM_SPECTATE_PASSWORD")
+      if expected == nil then
+        expected = "1234"
+      end
+      if expected ~= "" then
+        local q = req.query or {}
+        local qpw = q.spectate_password or q.llm_spectate_password
+        if qpw and qpw == expected then
+          return true
+        end
+        local h = req.headers or {}
+        local hp = h["x-spectate-password"] or h["x-llm-spectate-password"]
+        if type(hp) == "string" and hp ~= "" then
+          hp = hp:match("^%s*(.-)%s*$") or hp
+          if hp == expected then
+            return true
+          end
+        end
+        if type(req.json) == "table" then
+          local jpw = req.json.spectate_password or req.json.llm_spectate_password
+          if type(jpw) == "string" and jpw ~= "" then
+            jpw = jpw:match("^%s*(.-)%s*$") or jpw
+            if jpw == expected then
+              return true
+            end
+          end
+        end
+      end
+    end
     local admin_email = os.getenv("ADMIN_EMAIL") or ""
     if admin_email ~= "" then
       local sess = admin_auth.validate_session(req, admin_email)
@@ -553,7 +604,7 @@ local function run_http()
           "401 Unauthorized",
           api.error_body(
             "spectate_denied",
-            "Spectate denied. Sign in at /admin (same browser), or set env POKER_SPECTATE_SECRET and pass it via X-Spectate-Secret or ?spectate_key= on the request."
+            "Spectate denied. Use /llm_spectate.html with spectate_password (default 1234), sign in at /admin, or set POKER_SPECTATE_SECRET and pass X-Spectate-Secret or ?spectate_key=."
           ),
         }
       end
@@ -561,6 +612,176 @@ local function run_http()
     end
     local auth_pid = resolve_auth_player(req, c)
     return filter_snapshot_for_player(table_snapshot(c), auth_pid, c.tbl)
+  end)
+
+  srv:route("POST", "/v1/tables/:id/start-hand", function(req, params, s)
+    local c = resolve_table(params, s)
+    if not c then
+      return not_found_table
+    end
+    if not spectate_authorized(req) then
+      return {
+        "401 Unauthorized",
+        api.error_body(
+          "spectate_denied",
+          "Spectate password required (JSON spectate_password, header X-Spectate-Password, or query spectate_password)."
+        ),
+      }
+    end
+    if not c.manual_start_only then
+      return {
+        "400 Bad Request",
+        api.error_body(
+          "bad_request",
+          "Manual deal is only available on the LLM table (llm_bots)."
+        ),
+      }
+    end
+    local hand = c.hand
+    if hand.status ~= "idle" then
+      return {
+        "409 Conflict",
+        api.error_body(
+          "hand_not_idle",
+          "A hand is already in progress. Wait for it to finish before dealing again."
+        ),
+      }
+    end
+    local first, perr = hand:peek_first_actor(c.tbl)
+    if not first then
+      return {
+        "400 Bad Request",
+        api.error_body(
+          "need_players",
+          "Need at least two seated players with chips to post blinds.",
+          { reason = perr }
+        ),
+      }
+    end
+    local ok, serr = hand:start_hand(c.tbl)
+    if not ok then
+      return {
+        "400 Bad Request",
+        api.error_body("start_hand_failed", tostring(serr)),
+      }
+    end
+    local snap = table_snapshot(c)
+    return { ok = true, table = snap }
+  end)
+
+  srv:route("POST", "/v1/tables/:id/llm-step", function(req, params, s)
+    local c = resolve_table(params, s)
+    if not c then
+      return not_found_table
+    end
+    if os.getenv("POKER_LLM_STEP_HTTP") == "0" then
+      return {
+        "403 Forbidden",
+        api.error_body("forbidden", "LLM step over HTTP is disabled (POKER_LLM_STEP_HTTP=0)."),
+      }
+    end
+    if not spectate_authorized(req) then
+      return {
+        "401 Unauthorized",
+        api.error_body(
+          "spectate_denied",
+          "Spectate password required (JSON spectate_password, header X-Spectate-Password, or query)."
+        ),
+      }
+    end
+    if not c.manual_start_only then
+      return {
+        "400 Bad Request",
+        api.error_body("bad_request", "LLM step is only available on the LLM table (llm_bots)."),
+      }
+    end
+    local root = script_dir()
+    local port = os.getenv("POKER_PORT") or "8080"
+    local base = "http://127.0.0.1:" .. port
+    local tid = c.tbl.id
+    local cmd = string.format(
+      'cd %q && PYTHONUNBUFFERED=1 python3 -u -m llm_players --single-step --table %q --url %q --out-dir %q 2>&1',
+      root,
+      tid,
+      base,
+      root
+    )
+    io.stderr:write(
+      "[poker-server] llm-step: start table="
+        .. tid
+        .. " (streaming python lines; long gaps during Gemini/OpenAI calls are normal)\n"
+    )
+    io.stderr:flush()
+    local t0 = os.clock()
+    local h = io.popen(cmd, "r")
+    if not h then
+      return {
+        "500 Internal Server Error",
+        api.error_body("internal", "Could not run llm_players (single-step)."),
+      }
+    end
+    local out_parts = {}
+    local parsed = nil
+    while true do
+      local line = h:read("*l")
+      if not line then
+        break
+      end
+      out_parts[#out_parts + 1] = line
+      io.stderr:write(line .. "\n")
+      io.stderr:flush()
+      local trimmed = line:match("^%s*(.-)%s*$") or line
+      trimmed = trimmed:gsub("\r$", "")
+      if trimmed:sub(1, 1) == "{" then
+        local okj, decoded = pcall(json.decode, trimmed)
+        if okj and type(decoded) == "table" then
+          parsed = decoded
+        end
+      end
+    end
+    h:close()
+    local elapsed = os.clock() - t0
+
+    local out = table.concat(out_parts, "\n")
+    if #out_parts > 0 then
+      out = out .. "\n"
+    end
+
+    io.stderr:write(
+      string.format(
+        "[poker-server] llm-step: done in %.2fs bytes=%d lines=%s json=%s\n",
+        elapsed,
+        #out,
+        tostring(#out_parts),
+        parsed and "ok" or "missing"
+      )
+    )
+    if #out > 0 and not parsed then
+      local tail = out:sub(-1200)
+      io.stderr:write("[poker-server] llm-step: output tail (for debug):\n" .. tail .. "\n")
+    end
+    io.stderr:flush()
+
+    if not parsed then
+      return {
+        "500 Internal Server Error",
+        api.error_body(
+          "llm_step_bad_output",
+          "llm_players did not print a valid JSON line (see server stderr for [llm-step] / [poker-server] llm-step).",
+          { stdout_tail = out:sub(-2000) }
+        ),
+      }
+    end
+    if not parsed.ok then
+      local code = parsed.error_code or "step_failed"
+      local msg = parsed.error or "LLM step failed."
+      return {
+        "400 Bad Request",
+        api.error_body(code, msg, parsed),
+      }
+    end
+    local snap = table_snapshot(c)
+    return { ok = true, step = parsed, table = snap }
   end)
 
   srv:route("POST", "/v1/tables/:id/join", function(req, params, s)
