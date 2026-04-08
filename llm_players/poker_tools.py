@@ -101,13 +101,22 @@ def execute_tool(
     return {"error": "unknown_tool", "name": name}
 
 
+# Strict JSON Schema helps OpenAI-compatible providers (incl. Gemini) accept tool definitions.
+# Empty-parameter tools: explicit required=[] and additionalProperties=false.
+_PARAMS_EMPTY: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
 OPENAI_STYLE_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
             "name": "get_my_hole_cards",
             "description": "Your private hole cards (only you can see these).",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": _PARAMS_EMPTY,
         },
     },
     {
@@ -115,7 +124,7 @@ OPENAI_STYLE_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_community_cards",
             "description": "Board / community cards currently dealt.",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": _PARAMS_EMPTY,
         },
     },
     {
@@ -123,7 +132,7 @@ OPENAI_STYLE_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_opponents_state",
             "description": "Other players: stacks, folded, contribution this street (not their hole cards).",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": _PARAMS_EMPTY,
         },
     },
     {
@@ -131,7 +140,7 @@ OPENAI_STYLE_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_betting_context",
             "description": "Pot, current bet, min raise increment, positions, whose turn.",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": _PARAMS_EMPTY,
         },
     },
     {
@@ -139,7 +148,7 @@ OPENAI_STYLE_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_full_visible_snapshot",
             "description": "Single call: all of the above combined (faster than many calls).",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": _PARAMS_EMPTY,
         },
     },
     {
@@ -164,6 +173,7 @@ OPENAI_STYLE_TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["action"],
+                "additionalProperties": False,
             },
         },
     },

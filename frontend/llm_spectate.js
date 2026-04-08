@@ -15,6 +15,9 @@
   const spectateRefreshBtn = $("#spectateRefreshBtn");
   const startHandBtn = $("#startHandBtn");
   const llmStepBtn = $("#llmStepBtn");
+  const llmStepCancelBtn = $("#llmStepCancelBtn");
+  const llmThoughtPanel = $("#llmThoughtPanel");
+  const llmThoughtPre = $("#llmThoughtPre");
   const logoutSpectateBtn = $("#logoutSpectateBtn");
   const liveUpdatesCheckbox = $("#liveUpdates");
   const endpointEl = $("#endpointEl");
@@ -574,6 +577,80 @@
     }
   }
 
+  /** Browser-side cap so the UI never stays disabled forever; server may still run past this. */
+  const LLM_STEP_FETCH_MAX_MS = 20 * 60 * 1000;
+
+  let llmThoughtPollTimer = null;
+
+  function stopLlmThoughtPoll() {
+    if (llmThoughtPollTimer) {
+      clearInterval(llmThoughtPollTimer);
+      llmThoughtPollTimer = null;
+    }
+  }
+
+  function startLlmThoughtPoll(tid, pw) {
+    stopLlmThoughtPoll();
+    if (!llmThoughtPanel || !llmThoughtPre) return;
+    llmThoughtPanel.classList.remove("hidden");
+    llmThoughtPanel.open = true;
+    llmThoughtPre.textContent = "Waiting for first log lines…";
+    const logUrl =
+      location.origin +
+      "/v1/tables/" +
+      encodeURIComponent(tid) +
+      "/llm-step-log?spectate_password=" +
+      encodeURIComponent(pw);
+    async function pollOnce() {
+      try {
+        const r = await fetch(logUrl, { credentials: "omit", cache: "no-store" });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!j || j.ok !== true) return;
+        const lines = j.lines || [];
+        if (lines.length) {
+          llmThoughtPre.textContent = lines.join("\n");
+        } else if (j.awaiting_run) {
+          llmThoughtPre.textContent =
+            "(Waiting for server to accept Run AI turn — if this stays >2s, POST may be queued behind other requests.)";
+        } else {
+          llmThoughtPre.textContent =
+            "(No log lines yet — Python should print [llm-step] after join; API calls follow.)";
+        }
+        llmThoughtPre.scrollTop = llmThoughtPre.scrollHeight;
+        /* Do not stop on j.active === false: first poll can race before POST creates the log and would stop polling forever. Stop only in runLlmStep finally when POST returns. */
+      } catch (err) {
+        /* ignore */
+      }
+    }
+    pollOnce();
+    llmThoughtPollTimer = setInterval(pollOnce, 850);
+  }
+
+  function fetchLlmThoughtLogOnce(tid, pw) {
+    if (!llmThoughtPre) return Promise.resolve();
+    const logUrl =
+      location.origin +
+      "/v1/tables/" +
+      encodeURIComponent(tid) +
+      "/llm-step-log?spectate_password=" +
+      encodeURIComponent(pw);
+    return fetch(logUrl, { credentials: "omit", cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (j) {
+        if (j && j.lines && j.lines.length && llmThoughtPre) {
+          llmThoughtPre.textContent = j.lines.join("\n");
+          llmThoughtPre.scrollTop = llmThoughtPre.scrollHeight;
+        }
+      })
+      .catch(function () {
+        /* ignore */
+      });
+  }
+
   async function runLlmStep() {
     const tid = currentTableId();
     const pw = sessionStorage.getItem(STORAGE_KEY);
@@ -582,22 +659,52 @@
       return;
     }
     if (llmStepBtn) llmStepBtn.disabled = true;
-    barStatus.textContent = "Running LLM turn (API calls on server)…";
     barStatus.className = "sub";
-    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const t0 = Date.now();
     const url =
       location.origin + "/v1/tables/" + encodeURIComponent(tid) + "/llm-step";
     console.info("[llm-step] POST", url, "— see terminal running poker-server for [llm-step] / [poker-server] lines");
+
+    const ctrl = new AbortController();
+    const abortTimer = setTimeout(function () {
+      ctrl.abort();
+    }, LLM_STEP_FETCH_MAX_MS);
+    let elapsedTimer = null;
+    function tickStatus() {
+      const s = Math.floor((Date.now() - t0) / 1000);
+      const mx = Math.floor(LLM_STEP_FETCH_MAX_MS / 1000);
+      barStatus.textContent =
+        "Running LLM turn (API calls on server)… " +
+        s +
+        "s — slow models can take several minutes. Max wait in this tab: " +
+        mx +
+        "s (then you can retry).";
+    }
+    tickStatus();
+    elapsedTimer = setInterval(tickStatus, 1000);
+    if (llmStepCancelBtn) {
+      llmStepCancelBtn.classList.remove("hidden");
+      llmStepCancelBtn.onclick = function () {
+        ctrl.abort();
+      };
+    }
+
+    const postPromise = fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      credentials: "omit",
+      body: JSON.stringify({ spectate_password: pw }),
+      signal: ctrl.signal,
+    });
+    /* Defer log poll to next task so POST is typically accepted first (avoids GET seeing empty log + active:false race). */
+    setTimeout(function () {
+      startLlmThoughtPoll(tid, pw);
+    }, 0);
+
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        credentials: "omit",
-        body: JSON.stringify({ spectate_password: pw }),
-      });
+      const res = await postPromise;
       const text = await res.text();
-      const dt =
-        (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
+      const dt = Date.now() - t0;
       let data;
       try {
         data = text ? JSON.parse(text) : null;
@@ -657,10 +764,24 @@
       barStatus.className = "sub";
     } catch (e) {
       console.warn("[llm-step] network/exception", e);
-      barStatus.textContent = "Run AI turn failed: " + e.message;
-      barStatus.className = "sub spectate-error";
+      if (e && e.name === "AbortError") {
+        barStatus.textContent =
+          "Run AI turn stopped in this tab (timeout or Cancel wait). The poker server may still be running the LLM — check its terminal; refresh snapshot when it finishes.";
+        barStatus.className = "sub spectate-error";
+      } else {
+        barStatus.textContent = "Run AI turn failed: " + (e && e.message ? e.message : String(e));
+        barStatus.className = "sub spectate-error";
+      }
     } finally {
+      clearTimeout(abortTimer);
+      if (elapsedTimer) clearInterval(elapsedTimer);
+      if (llmStepCancelBtn) {
+        llmStepCancelBtn.classList.add("hidden");
+        llmStepCancelBtn.onclick = null;
+      }
       if (llmStepBtn) llmStepBtn.disabled = false;
+      stopLlmThoughtPoll();
+      void fetchLlmThoughtLogOnce(tid, pw);
     }
   }
 
@@ -854,6 +975,12 @@
     }
     if (logoutSpectateBtn) {
       logoutSpectateBtn.addEventListener("click", () => {
+        stopLlmThoughtPoll();
+        if (llmThoughtPanel) {
+          llmThoughtPanel.classList.add("hidden");
+          llmThoughtPanel.open = false;
+        }
+        if (llmThoughtPre) llmThoughtPre.textContent = "";
         sessionStorage.removeItem(STORAGE_KEY);
         showPasswordGate("");
         barStatus.textContent = "Locked";

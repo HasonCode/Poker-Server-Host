@@ -31,6 +31,16 @@ from .providers import (
 )
 
 
+def _stderr(msg: str) -> None:
+    sys.stderr.write(msg)
+    sys.stderr.flush()
+
+
+def _stdout(msg: str) -> None:
+    sys.stdout.write(msg)
+    sys.stdout.flush()
+
+
 def _extra_headers_for_openai_compat(base_url: str, api_key: str) -> dict[str, str]:
     if "generativelanguage.googleapis.com" in base_url:
         return {"x-goog-api-key": api_key}
@@ -127,7 +137,7 @@ def _player_loop(
     env = os.environ
     key = env.get(pc.env_api_key) or ""
     if not key.strip():
-        sys.stderr.write(f"[llm_players] Missing env {pc.env_api_key} for {pc.player_id}\n")
+        _stderr(f"[llm_players] Missing env {pc.env_api_key} for {pc.player_id}\n")
         return
     model = resolve_model_env(pc, env)
 
@@ -137,7 +147,7 @@ def _player_loop(
                 table_id, pc.player_id, poll_interval=0.4, timeout=None
             )
         except (PokerError, TransportError) as e:
-            sys.stderr.write(f"[{pc.player_id}] wait_for_turn: {e}\n")
+            _stderr(f"[{pc.player_id}] wait_for_turn: {e}\n")
             time.sleep(1.0)
             continue
 
@@ -148,7 +158,7 @@ def _player_loop(
         try:
             action, amount = _decide(pc, key, model, state)
         except Exception as e:
-            sys.stderr.write(f"[{pc.player_id}] decide error: {e}\n")
+            _stderr(f"[{pc.player_id}] decide error: {e}\n")
             action, amount = "fold", None
 
         action = (action or "fold").lower()
@@ -161,7 +171,7 @@ def _player_loop(
                 queue=False,
             )
         except PokerError as e:
-            sys.stderr.write(f"[{pc.player_id}] action {action} failed: {e}\n")
+            _stderr(f"[{pc.player_id}] action {action} failed: {e}\n")
             try:
                 client.send_action(
                     table_id,
@@ -178,7 +188,7 @@ def _player_loop(
             mono = _monologue(pc, key, model, user_message=um)
             recorder.append_monologue(pc.display_name, pc.player_id, ctx, mono)
         except Exception as e:
-            sys.stderr.write(f"[{pc.player_id}] monologue error: {e}\n")
+            _stderr(f"[{pc.player_id}] monologue error: {e}\n")
 
 
 def _hand_watcher(
@@ -194,7 +204,7 @@ def _hand_watcher(
         try:
             state = client.get_table_state(table_id)
         except Exception as e:
-            sys.stderr.write(f"[watcher] {e}\n")
+            _stderr(f"[watcher] {e}\n")
             time.sleep(0.5)
             continue
         h = state.get("hand") or {}
@@ -245,14 +255,13 @@ def _print_step_banner(
     h = state.get("hand") or {}
     seat = _seat_for_player(state, pc.player_id)
     hs = shared.get("hand_seq", "?")
-    sys.stdout.write(
+    _stdout(
         f"\n{'='*60}\n"
         f"[LLM] {pc.display_name}  ·  player_id={pc.player_id}  ·  seat {seat}\n"
         f"      street={h.get('street')}  ·  pot={h.get('pot')}  ·  "
         f"Hand {hs} (watcher)\n"
         f"{'='*60}\n"
     )
-    sys.stdout.flush()
 
 
 def _compact_table_line(state: dict, player_by_id: dict[str, PlayerConfig]) -> str:
@@ -281,22 +290,21 @@ def _table_status_poll(
         try:
             state = client.get_table_state(table_id)
         except Exception as e:
-            sys.stderr.write(f"[table poll] {e}\n")
+            _stderr(f"[table poll] {e}\n")
             if stop.wait(interval):
                 break
             continue
-        sys.stderr.write(_compact_table_line(state, player_by_id) + "\n")
+        _stderr(_compact_table_line(state, player_by_id) + "\n")
         if stop.wait(interval):
             break
 
 
 def _interactive_next_llm_move(pc: PlayerConfig, stop: threading.Event) -> bool:
-    sys.stdout.write(
+    _stdout(
         f"\n[Next LLM move] — {pc.display_name} ({pc.player_id})\n"
         f"  Runs decide (tools) → send action → monologue in one step.\n"
         f"  Enter = run  ·  q = quit: "
     )
-    sys.stdout.flush()
     try:
         line = input()
     except EOFError:
@@ -319,7 +327,7 @@ def _join_players_parallel(
     for pc in players:
         key = os.environ.get(pc.env_api_key) or ""
         if not key.strip():
-            sys.stderr.write(
+            _stderr(
                 f"Skipping {pc.player_id}: set {pc.env_api_key} in the environment.\n"
             )
             continue
@@ -349,7 +357,7 @@ def _join_players_parallel(
     for pc in to_join:
         c, err = results[pc.player_id]
         if err is not None:
-            sys.stderr.write(f"Join failed for {pc.player_id}: {err}\n")
+            _stderr(f"Join failed for {pc.player_id}: {err}\n")
             continue
         if c is not None:
             clients.append(c)
@@ -358,20 +366,17 @@ def _join_players_parallel(
 
 
 def _emit_step_json(d: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(d))
-    sys.stdout.flush()
+    _stdout(json.dumps(d))
 
 
 def _fail_step(code: str, message: str) -> None:
-    sys.stderr.write(f"[llm-step] FAIL {code}: {message}\n")
-    sys.stderr.flush()
+    _stderr(f"[llm-step] FAIL {code}: {message}\n")
     _emit_step_json({"ok": False, "error": message, "error_code": code})
     sys.exit(1)
 
 
 def _step_log(msg: str) -> None:
-    sys.stderr.write(f"[llm-step] {msg}\n")
-    sys.stderr.flush()
+    _stderr(f"[llm-step] {msg}\n")
 
 
 def run_single_step(args: argparse.Namespace) -> None:
@@ -439,11 +444,18 @@ def run_single_step(args: argparse.Namespace) -> None:
     hand_ctx = f"{h2.get('street') or '?'} pot={h2.get('pot')}"
     _step_log(f"model={model!r} context={hand_ctx!r}")
 
+    if not key.strip():
+        _fail_step(
+            "no_api_key",
+            f"Missing API key for {pc.player_id}: export {pc.env_api_key} before starting the poker server "
+            "(or source a script that sets it).",
+        )
+
     _step_log("calling LLM decide() (tools + chat) — may take a while…")
     try:
         action, amount = _decide(pc, key, model, state)
     except Exception as e:
-        sys.stderr.write(f"[{pc.player_id}] decide error: {e}\n")
+        _stderr(f"[{pc.player_id}] decide error: {e}\n")
         action, amount = "fold", None
 
     action = (action or "fold").lower()
@@ -457,7 +469,7 @@ def run_single_step(args: argparse.Namespace) -> None:
             queue=False,
         )
     except PokerError as e:
-        sys.stderr.write(f"[{pc.player_id}] action {action} failed: {e}\n")
+        _stderr(f"[{pc.player_id}] action {action} failed: {e}\n")
         try:
             act_client.send_action(
                 table_id,
@@ -471,13 +483,20 @@ def run_single_step(args: argparse.Namespace) -> None:
 
     _step_log("send_action OK; calling monologue…")
     mono = ""
-    try:
-        um = _monologue_user_message_after_play(pc, hand_ctx, action, amount)
-        mono = _monologue(pc, key, model, user_message=um)
-        recorder.append_monologue(pc.display_name, pc.player_id, hand_ctx, mono)
-        _step_log(f"monologue length={len(mono)} chars")
-    except Exception as e:
-        sys.stderr.write(f"[{pc.player_id}] monologue error: {e}\n")
+    skip_mono = (
+        os.environ.get("LLM_SINGLE_STEP_SKIP_MONOLOGUE", "").strip().lower()
+        in ("1", "true", "yes")
+    )
+    if skip_mono:
+        _step_log("skipping monologue (LLM_SINGLE_STEP_SKIP_MONOLOGUE=1)")
+    else:
+        try:
+            um = _monologue_user_message_after_play(pc, hand_ctx, action, amount)
+            mono = _monologue(pc, key, model, user_message=um)
+            recorder.append_monologue(pc.display_name, pc.player_id, hand_ctx, mono)
+            _step_log(f"monologue length={len(mono)} chars")
+        except Exception as e:
+            _stderr(f"[{pc.player_id}] monologue error: {e}\n")
 
     _step_log("emitting JSON on stdout (single line)")
     _emit_step_json(
@@ -504,7 +523,7 @@ def _poll_until_llm_turn(
         try:
             state = client.get_table_state(table_id)
         except Exception as e:
-            sys.stderr.write(f"[step] poll: {e}\n")
+            _stderr(f"[step] poll: {e}\n")
             time.sleep(0.5)
             continue
         pid = _actor_pid_from_state(state)
@@ -527,7 +546,7 @@ def run_step(args: argparse.Namespace) -> None:
         players = tuple(p for p in DEFAULT_PLAYERS if p.player_id in wanted)
 
     if not players:
-        sys.stderr.write("No players selected.\n")
+        _stderr("No players selected.\n")
         sys.exit(1)
 
     base_url = args.url
@@ -544,7 +563,7 @@ def run_step(args: argparse.Namespace) -> None:
     clients, joined = _join_players_parallel(players, base_url, table_id, args.chips)
 
     if not clients:
-        sys.stderr.write("No players joined — check API keys and table availability.\n")
+        _stderr("No players joined — check API keys and table availability.\n")
         sys.exit(1)
 
     player_by_id = {pc.player_id: pc for pc in joined}
@@ -569,11 +588,11 @@ def run_step(args: argparse.Namespace) -> None:
         )
         poller.start()
 
-    sys.stdout.write(
+    _stdout(
         "\n*** Step mode — stderr logs table status (~1.5s); press Enter once per LLM to run play + monologue. ***\n"
         "*** Use --auto for continuous multi-threaded play. Use --no-table-poll to silence table lines. ***\n\n"
     )
-    sys.stderr.write(
+    _stderr(
         f"[step mode] game_id={game_id} — transcript {recorder.transcript_path} — "
         f"results {recorder.results_path}\n"
     )
@@ -597,7 +616,7 @@ def run_step(args: argparse.Namespace) -> None:
         try:
             action, amount = _decide(pc, key, model, state)
         except Exception as e:
-            sys.stderr.write(f"[{pc.player_id}] decide error: {e}\n")
+            _stderr(f"[{pc.player_id}] decide error: {e}\n")
             action, amount = "fold", None
 
         action = (action or "fold").lower()
@@ -610,7 +629,7 @@ def run_step(args: argparse.Namespace) -> None:
                 queue=False,
             )
         except PokerError as e:
-            sys.stderr.write(f"[{pc.player_id}] action {action} failed: {e}\n")
+            _stderr(f"[{pc.player_id}] action {action} failed: {e}\n")
             try:
                 poll_client.send_action(
                     table_id,
@@ -629,7 +648,7 @@ def run_step(args: argparse.Namespace) -> None:
             mono = _monologue(pc, key, model, user_message=um)
             recorder.append_monologue(pc.display_name, pc.player_id, ctx, mono)
         except Exception as e:
-            sys.stderr.write(f"[{pc.player_id}] monologue error: {e}\n")
+            _stderr(f"[{pc.player_id}] monologue error: {e}\n")
 
     time.sleep(0.2)
 
@@ -646,7 +665,7 @@ def run_auto(args: argparse.Namespace) -> None:
         players = tuple(p for p in DEFAULT_PLAYERS if p.player_id in wanted)
 
     if not players:
-        sys.stderr.write("No players selected.\n")
+        _stderr("No players selected.\n")
         sys.exit(1)
 
     base_url = args.url
@@ -674,7 +693,7 @@ def run_auto(args: argparse.Namespace) -> None:
         )
 
     if not threads:
-        sys.stderr.write("No players joined — check API keys and table availability.\n")
+        _stderr("No players joined — check API keys and table availability.\n")
         sys.exit(1)
 
     watch_client = clients[0]
@@ -689,7 +708,7 @@ def run_auto(args: argparse.Namespace) -> None:
     for t in threads:
         t.start()
 
-    sys.stderr.write(
+    _stderr(
         f"[auto mode] game_id={game_id} — transcript {recorder.transcript_path} — "
         f"results {recorder.results_path}\n"
     )

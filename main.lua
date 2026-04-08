@@ -152,6 +152,7 @@ local function create_server_state()
       }),
     },
     pending_joins = {},
+    pending_llm_steps = {},
   }
 end
 
@@ -340,6 +341,26 @@ local function run_http()
   local state = create_server_state()
   local root = script_dir()
 
+  -- libc line-buffering for redirected python output (coreutils stdbuf); helps server see logs immediately.
+  local llm_stdbuf_prefix_cache = nil
+  local function llm_stdbuf_prefix()
+    if llm_stdbuf_prefix_cache ~= nil then
+      return llm_stdbuf_prefix_cache
+    end
+    local w = io.popen("command -v stdbuf 2>/dev/null", "r")
+    local p = ""
+    if w then
+      p = w:read("*l") or ""
+      w:close()
+    end
+    if p ~= "" then
+      llm_stdbuf_prefix_cache = p .. " -oL -eL "
+    else
+      llm_stdbuf_prefix_cache = ""
+    end
+    return llm_stdbuf_prefix_cache
+  end
+
   local function pending_client_closed(client)
     if not socket_ok then
       return false
@@ -427,6 +448,239 @@ local function run_http()
     return "ok", join_response_success(c, player_id)
   end
 
+  --- While llm-step runs, the Python child must call this same HTTP server (join/state/actions).
+  --- Blocking io.popen in the handler would deadlock; we defer the HTTP response and poll output in tick.
+  local function process_running_pid(pid)
+    if not pid then
+      return false
+    end
+    local code = os.execute("kill -0 " .. tostring(pid) .. " 2>/dev/null")
+    return code == true or code == 0
+  end
+
+  local function build_llm_step_http_result(c, parsed, out_str)
+    if not parsed then
+      return {
+        "500 Internal Server Error",
+        api.error_body(
+          "llm_step_bad_output",
+          "llm_players did not print a valid JSON line (see server stderr for [llm-step] / [poker-server] llm-step).",
+          { stdout_tail = (out_str or ""):sub(-2000) }
+        ),
+      }
+    end
+    if not parsed.ok then
+      local code = parsed.error_code or "step_failed"
+      local msg = parsed.error or "LLM step failed."
+      return {
+        "400 Bad Request",
+        api.error_body(code, msg, parsed),
+      }
+    end
+    local snap = table_snapshot(c)
+    return { ok = true, step = parsed, table = snap }
+  end
+
+  local function send_llm_step_http(client, result)
+    if type(result) == "table" and type(result[1]) == "string" and result[2] ~= nil then
+      http_mod.send_json_response(client, result[1], result[2])
+    else
+      http_mod.send_json_response(client, "200 OK", result)
+    end
+  end
+
+  local function remove_llm_step_files(pj)
+    pcall(function()
+      os.remove(pj.out_path)
+    end)
+    pcall(function()
+      os.remove(pj.out_path .. ".pid")
+    end)
+  end
+
+  --- Live log for spectate UI (GET /llm-step-log) while deferred llm-step runs.
+  local function llm_step_log_append(c, line)
+    if not c or type(c.llm_step_log) ~= "table" then
+      return
+    end
+    if c.llm_step_log.active == false then
+      return
+    end
+    local s = type(line) == "string" and line or tostring(line)
+    if s:sub(1, 1) == "{" and #s > 520 then
+      s = s:sub(1, 520) .. "… [truncated JSON line; full result when run completes]"
+    end
+    local L = c.llm_step_log.lines
+    L[#L + 1] = s
+    while #L > 600 do
+      table.remove(L, 1)
+    end
+  end
+
+  local function llm_step_log_deactivate(c)
+    if not c or type(c.llm_step_log) ~= "table" then
+      return
+    end
+    c.llm_step_log.active = false
+  end
+
+  local function process_pending_llm_step_entry(pj)
+    local client = pj.client
+    local c = pj.table_ctx
+    if pending_client_closed(client) then
+      pcall(function()
+        client:close()
+      end)
+      if pj.pid then
+        pcall(function()
+          os.execute("kill " .. tostring(pj.pid) .. " 2>/dev/null")
+        end)
+      end
+      llm_step_log_append(c, "[poker-server] Spectator disconnected — cancelled wait.")
+      llm_step_log_deactivate(c)
+      remove_llm_step_files(pj)
+      return true
+    end
+
+    if os.clock() >= pj.deadline then
+      if pj.pid then
+        pcall(function()
+          os.execute("kill " .. tostring(pj.pid) .. " 2>/dev/null")
+        end)
+      end
+      local tail = ""
+      local rf = io.open(pj.out_path, "rb")
+      if rf then
+        local allt = rf:read("*a") or ""
+        rf:close()
+        tail = allt:sub(-2000)
+      end
+      llm_step_log_append(
+        c,
+        "[poker-server] Timeout after POKER_LLM_STEP_MAX_SEC — subprocess may have been killed."
+      )
+      llm_step_log_deactivate(c)
+      http_mod.send_json_response(
+        client,
+        "504 Gateway Timeout",
+        api.error_body(
+          "llm_step_timeout",
+          "LLM step exceeded POKER_LLM_STEP_MAX_SEC while waiting for llm_players.",
+          { stdout_tail = tail }
+        )
+      )
+      pcall(function()
+        client:close()
+      end)
+      remove_llm_step_files(pj)
+      return true
+    end
+
+    pj.buf = pj.buf or ""
+    pj.seen = pj.seen or 0
+    local all = ""
+    local f = io.open(pj.out_path, "rb")
+    if f then
+      all = f:read("*a") or ""
+      f:close()
+    end
+
+    if not pj.logged_stdout_started and #all > 0 then
+      pj.logged_stdout_started = true
+      llm_step_log_append(
+        c,
+        "[poker-server] Subprocess output file has data — parsing lines (join, then LLM API calls)…"
+      )
+    end
+
+    if #all > pj.seen then
+      local new = all:sub(pj.seen + 1)
+      pj.seen = #all
+      pj.buf = pj.buf .. new
+      while true do
+        local nl = pj.buf:find("\n")
+        if not nl then
+          break
+        end
+        local line = pj.buf:sub(1, nl - 1)
+        pj.buf = pj.buf:sub(nl + 1)
+        line = line:gsub("\r$", "")
+        io.stderr:write(line .. "\n")
+        io.stderr:flush()
+        llm_step_log_append(c, line)
+        local trimmed = line:match("^%s*(.-)%s*$") or line
+        if trimmed:sub(1, 1) == "{" then
+          local okj, decoded = pcall(json.decode, trimmed)
+          if okj and type(decoded) == "table" then
+            pj.parsed = decoded
+            break
+          end
+        end
+      end
+    end
+
+    local function finish_ok(parsed)
+      local elapsed = os.clock() - (pj.t0 or os.clock())
+      io.stderr:write(string.format("[poker-server] llm-step: done in %.2fs bytes=%d json=ok (deferred)\n", elapsed, #all))
+      io.stderr:flush()
+      llm_step_log_append(
+        c,
+        string.format("[poker-server] Done in %.1fs — sending HTTP response to browser.", elapsed)
+      )
+      llm_step_log_deactivate(c)
+      local result = build_llm_step_http_result(c, parsed, all)
+      send_llm_step_http(client, result)
+      pcall(function()
+        client:close()
+      end)
+      remove_llm_step_files(pj)
+      return true
+    end
+
+    if pj.parsed then
+      return finish_ok(pj.parsed)
+    end
+
+    if not process_running_pid(pj.pid) then
+      local rest = (pj.buf or ""):match("^%s*(.-)%s*$") or ""
+      if rest:sub(1, 1) == "{" then
+        local okj, decoded = pcall(json.decode, rest)
+        if okj and type(decoded) == "table" then
+          return finish_ok(decoded)
+        end
+      end
+      if #all == 0 and rest == "" then
+        llm_step_log_append(c, "[poker-server] llm_players exited with no output.")
+        llm_step_log_deactivate(c)
+        http_mod.send_json_response(
+          client,
+          "500 Internal Server Error",
+          api.error_body("llm_step_bad_output", "llm_players exited before printing output.", {})
+        )
+        pcall(function()
+          client:close()
+        end)
+        remove_llm_step_files(pj)
+        return true
+      end
+      if #all > 0 then
+        io.stderr:write("[poker-server] llm-step: output tail (for debug):\n" .. all:sub(-1200) .. "\n")
+        io.stderr:flush()
+      end
+      llm_step_log_append(c, "[poker-server] Run finished with an error or missing JSON line.")
+      llm_step_log_deactivate(c)
+      local result = build_llm_step_http_result(c, nil, all)
+      send_llm_step_http(client, result)
+      pcall(function()
+        client:close()
+      end)
+      remove_llm_step_files(pj)
+      return true
+    end
+
+    return false
+  end
+
   local function process_pending_join_entry(pj)
     local client = pj.client
     local j = pj.json
@@ -474,6 +728,16 @@ local function run_http()
 
   local function process_pending_joins(srv)
     local s = srv.get_context()
+    if s.pending_llm_steps then
+      local i = 1
+      while i <= #s.pending_llm_steps do
+        if process_pending_llm_step_entry(s.pending_llm_steps[i]) then
+          table.remove(s.pending_llm_steps, i)
+        else
+          i = i + 1
+        end
+      end
+    end
     -- Process deferred join HTTP waiters first so seats fill while the hand is still idle,
     -- before table_snapshot runs ai.run_until_human / start_hand.
     local i = 1
@@ -695,93 +959,122 @@ local function run_http()
         api.error_body("bad_request", "LLM step is only available on the LLM table (llm_bots)."),
       }
     end
+    if s.pending_llm_steps and #s.pending_llm_steps > 0 then
+      return {
+        "409 Conflict",
+        api.error_body("llm_step_busy", "Another Run AI turn is still in progress; wait for it to finish."),
+      }
+    end
     local root = script_dir()
     local port = os.getenv("POKER_PORT") or "8080"
     local base = "http://127.0.0.1:" .. port
     local tid = c.tbl.id
-    local cmd = string.format(
-      'cd %q && PYTHONUNBUFFERED=1 python3 -u -m llm_players --single-step --table %q --url %q --out-dir %q 2>&1',
+    local out_path = os.tmpname() .. "_llm_step_out.txt"
+    -- Subshell + background: POSIX sh parses `cd && ... & echo $!` wrong without parens.
+    -- PID is written to pid_path; shell stdout may be empty.
+    local pid_path = out_path .. ".pid"
+    local inner = string.format(
+      "(cd %q && PYTHONUNBUFFERED=1 %spython3 -u -m llm_players --single-step --table %q --url %q --out-dir %q > %q 2>&1) & echo $! > %q",
       root,
+      llm_stdbuf_prefix(),
       tid,
       base,
-      root
+      root,
+      out_path,
+      pid_path
     )
+    local cmd = "sh -c " .. string.format("%q", inner)
     io.stderr:write(
       "[poker-server] llm-step: start table="
         .. tid
-        .. " (streaming python lines; long gaps during Gemini/OpenAI calls are normal)\n"
+        .. " (deferred response — subprocess can call this server on "
+        .. base
+        .. ")\n"
     )
     io.stderr:flush()
-    local t0 = os.clock()
     local h = io.popen(cmd, "r")
     if not h then
+      pcall(function()
+        os.remove(out_path)
+      end)
+      pcall(function()
+        os.remove(pid_path)
+      end)
       return {
         "500 Internal Server Error",
-        api.error_body("internal", "Could not run llm_players (single-step)."),
+        api.error_body("internal", "Could not spawn llm_players (single-step)."),
       }
     end
-    local out_parts = {}
-    local parsed = nil
-    while true do
-      local line = h:read("*l")
-      if not line then
-        break
-      end
-      out_parts[#out_parts + 1] = line
-      io.stderr:write(line .. "\n")
-      io.stderr:flush()
-      local trimmed = line:match("^%s*(.-)%s*$") or line
-      trimmed = trimmed:gsub("\r$", "")
-      if trimmed:sub(1, 1) == "{" then
-        local okj, decoded = pcall(json.decode, trimmed)
-        if okj and type(decoded) == "table" then
-          parsed = decoded
-        end
-      end
-    end
+    h:read("*a")
     h:close()
-    local elapsed = os.clock() - t0
-
-    local out = table.concat(out_parts, "\n")
-    if #out_parts > 0 then
-      out = out .. "\n"
+    local pid_line = nil
+    local pf = io.open(pid_path, "r")
+    if pf then
+      pid_line = pf:read("*l")
+      pf:close()
     end
-
-    io.stderr:write(
-      string.format(
-        "[poker-server] llm-step: done in %.2fs bytes=%d lines=%s json=%s\n",
-        elapsed,
-        #out,
-        tostring(#out_parts),
-        parsed and "ok" or "missing"
-      )
-    )
-    if #out > 0 and not parsed then
-      local tail = out:sub(-1200)
-      io.stderr:write("[poker-server] llm-step: output tail (for debug):\n" .. tail .. "\n")
-    end
-    io.stderr:flush()
-
-    if not parsed then
+    local pid = tonumber((pid_line or ""):match("^%s*(%d+)"))
+    if not pid then
+      pcall(function()
+        os.remove(out_path)
+      end)
+      pcall(function()
+        os.remove(pid_path)
+      end)
       return {
         "500 Internal Server Error",
         api.error_body(
-          "llm_step_bad_output",
-          "llm_players did not print a valid JSON line (see server stderr for [llm-step] / [poker-server] llm-step).",
-          { stdout_tail = out:sub(-2000) }
+          "internal",
+          "Could not read subprocess pid for llm_players (single-step). Check that python3 and llm_players are available.",
+          { pid_line = pid_line, pid_path = pid_path }
         ),
       }
     end
-    if not parsed.ok then
-      local code = parsed.error_code or "step_failed"
-      local msg = parsed.error or "LLM step failed."
+    c.llm_step_log = { lines = {}, active = true, t0 = os.clock() }
+    llm_step_log_append(
+      c,
+      "[llm-step] Subprocess started — lines from llm_players (tools, HTTP heartbeats, monologue) stream below."
+    )
+    return {
+      __defer_llm_step = true,
+      out_path = out_path,
+      pid = pid,
+      table_ctx = c,
+    }
+  end)
+
+  srv:route("GET", "/v1/tables/:id/llm-step-log", function(req, params, s)
+    if not spectate_authorized(req) then
       return {
-        "400 Bad Request",
-        api.error_body(code, msg, parsed),
+        "401 Unauthorized",
+        api.error_body(
+          "spectate_denied",
+          "Spectate password required (query spectate_password, header X-Spectate-Password, or admin session)."
+        ),
       }
     end
-    local snap = table_snapshot(c)
-    return { ok = true, step = parsed, table = snap }
+    local c = resolve_table(params, s)
+    if not c then
+      return not_found_table
+    end
+    local log = c.llm_step_log
+    -- No log yet: POST /llm-step handler may not have run (GET raced first). Do not report active=false
+    -- or clients stop polling and never show subprocess/API lines.
+    if type(log) ~= "table" then
+      return { ok = true, active = true, awaiting_run = true, lines = {}, elapsed_sec = 0 }
+    end
+    local lines = log.lines or {}
+    local out = {}
+    for i = 1, #lines do
+      out[i] = lines[i]
+    end
+    local t0 = log.t0 or os.clock()
+    return {
+      ok = true,
+      active = log.active ~= false,
+      lines = out,
+      elapsed_sec = os.clock() - t0,
+    }
   end)
 
   srv:route("POST", "/v1/tables/:id/join", function(req, params, s)

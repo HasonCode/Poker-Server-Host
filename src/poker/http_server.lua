@@ -269,6 +269,13 @@ function M:match_handler(method, path)
       return h, { table_id = id }
     end
   end
+  id = path:match("^/v1/tables/([^/]+)/llm%-step%-log$")
+  if id and method == "GET" then
+    local h = self.routes["GET /v1/tables/:id/llm-step-log"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
   id = path:match("^/v1/tables/([^/]+)/bot/start$")
   if id and method == "POST" then
     local h = self.routes["POST /v1/tables/:id/bot/start"]
@@ -384,6 +391,21 @@ function M:serve_one()
         deadline = os.clock() + wait_sec,
         ctx = res_or_err.ctx,
         json = res_or_err.json,
+      }
+      return true
+    elseif type(res_or_err) == "table" and res_or_err.__defer_llm_step then
+      local ctx = self.get_context()
+      if not ctx.pending_llm_steps then
+        ctx.pending_llm_steps = {}
+      end
+      local max_sec = tonumber(os.getenv("POKER_LLM_STEP_MAX_SEC")) or 3600
+      ctx.pending_llm_steps[#ctx.pending_llm_steps + 1] = {
+        client = client,
+        deadline = os.clock() + max_sec,
+        out_path = res_or_err.out_path,
+        pid = res_or_err.pid,
+        table_ctx = res_or_err.table_ctx,
+        t0 = os.clock(),
       }
       return true
     elseif type(res_or_err) == "table" and res_or_err.__raw then

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import sys
+import threading
 import urllib.error
 import urllib.request
 from typing import Any, Callable
@@ -14,11 +16,52 @@ from . import poker_tools as pt
 from . import prompts
 
 
-def _post_json(
+def _configure_stdio() -> None:
+    """Line-buffer when stderr is redirected to a file (llm-step); avoids huge silent buffers."""
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    for stream in (sys.stdout, sys.stderr):
+        if not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            stream.reconfigure(line_buffering=True)
+        except Exception:
+            try:
+                stream.reconfigure(write_through=True)
+            except Exception:
+                pass
+
+
+_configure_stdio()
+
+
+def _http_timeout() -> float:
+    """Per-request socket timeout (seconds). Override: LLM_HTTP_TIMEOUT or POKER_LLM_HTTP_TIMEOUT."""
+    raw = os.environ.get("LLM_HTTP_TIMEOUT") or os.environ.get("POKER_LLM_HTTP_TIMEOUT")
+    if raw:
+        try:
+            t = float(raw)
+            if t > 0:
+                return t
+        except ValueError:
+            pass
+    return 120.0
+
+
+def _heartbeat_interval() -> float:
+    """Seconds between 'still waiting' stderr lines during one HTTP call; 0 disables."""
+    raw = os.environ.get("LLM_HTTP_HEARTBEAT_SEC", "25")
+    try:
+        v = float(raw)
+        return v if v > 0 else 0.0
+    except ValueError:
+        return 25.0
+
+
+def _post_json_impl(
     url: str,
     headers: dict[str, str],
     body: dict[str, Any],
-    timeout: float = 120.0,
+    timeout: float,
 ) -> dict[str, Any]:
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
@@ -40,8 +83,67 @@ def _post_json(
     return json.loads(raw.decode("utf-8"))
 
 
+def _post_json(
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """POST JSON; optional heartbeat on stderr while waiting (single long Gemini call has no other log lines)."""
+    t = _http_timeout() if timeout is None else timeout
+    if t <= 0:
+        t = 120.0
+
+    hb = _heartbeat_interval()
+    if hb <= 0:
+        return _post_json_impl(url, headers, body, t)
+
+    box: dict[str, Any] = {}
+    err: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            box["data"] = _post_json_impl(url, headers, body, t)
+        except BaseException as e:
+            err.append(e)
+
+    th = threading.Thread(target=worker, daemon=True)
+    th.start()
+    elapsed = 0.0
+    while th.is_alive():
+        th.join(timeout=hb)
+        if th.is_alive():
+            elapsed += hb
+            sys.stderr.write(
+                f"[llm-step] HTTP still in progress ({elapsed:.0f}s / {t:.0f}s timeout) — "
+                "waiting on provider…\n"
+            )
+            sys.stderr.flush()
+    if err:
+        raise err[0]
+    return box["data"]
+
+
 def _normalize_base(url: str) -> str:
     return url.rstrip("/")
+
+
+def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
+    """OpenAI spec uses a JSON string; some OpenAI-compat providers return a dict."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return {}
+        try:
+            out = json.loads(s)
+        except json.JSONDecodeError:
+            return {}
+        return out if isinstance(out, dict) else {}
+    return {}
 
 
 def monologue_openai_compat(
@@ -72,6 +174,10 @@ def monologue_openai_compat(
             {"role": "user", "content": um},
         ],
     }
+    sys.stderr.write(
+        f"[llm-step] monologue → POST chat/completions (timeout {_http_timeout():.0f}s)…\n"
+    )
+    sys.stderr.flush()
     data = _post_json(url, headers, body)
     ch = data.get("choices") or []
     if not ch:
@@ -102,6 +208,10 @@ def monologue_anthropic(
         "system": prompts.MONOLOGUE_SYSTEM,
         "messages": [{"role": "user", "content": um}],
     }
+    sys.stderr.write(
+        f"[llm-step] monologue → POST messages (timeout {_http_timeout():.0f}s)…\n"
+    )
+    sys.stderr.flush()
     data = _post_json(url, headers, body)
     blocks = data.get("content") or []
     parts: list[str] = []
@@ -160,10 +270,13 @@ def decide_openai_compat(
         lambda name, args: pt.execute_tool(name, state, player_id, args)
     )
 
+    to = _http_timeout()
+    hb = _heartbeat_interval()
+    hb_note = f"{hb:.0f}s between lines" if hb > 0 else "off"
     for rnd in range(max_rounds):
         sys.stderr.write(
             f"[llm-step] decide round {rnd + 1}/{max_rounds} → POST chat/completions "
-            f"(each call can take up to 120s on slow providers)…\n"
+            f"(timeout {to:.0f}s/call; in-call progress {hb_note})…\n"
         )
         sys.stderr.flush()
         body: dict[str, Any] = {
@@ -174,6 +287,14 @@ def decide_openai_compat(
             "tool_choice": "auto",
         }
         data = _post_json(url, headers, body)
+        if isinstance(data, dict) and data.get("error") is not None:
+            err = data.get("error")
+            msg = err.get("message") if isinstance(err, dict) else str(err)
+            typ = err.get("type") if isinstance(err, dict) else ""
+            raise RuntimeError(
+                f"Provider rejected request (often invalid tool schema or model): {msg}"
+                + (f" type={typ}" if typ else "")
+            )
         ch = (data.get("choices") or [None])[0]
         if not ch:
             raise RuntimeError(f"No choices: {data!r}")
@@ -192,13 +313,7 @@ def decide_openai_compat(
                 name = fn.get("name") or ""
                 if name == "submit_poker_action":
                     continue
-                raw_args = fn.get("arguments") or "{}"
-                try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else {}
-                except json.JSONDecodeError:
-                    args = {}
-                if not isinstance(args, dict):
-                    args = {}
+                args = _parse_tool_arguments(fn.get("arguments"))
                 tid = tc.get("id") or "call"
                 result = tool_exec(name, args)
                 messages.append(
@@ -210,13 +325,7 @@ def decide_openai_compat(
                 )
             if submit_tc is not None:
                 fn = submit_tc.get("function") or {}
-                raw_args = fn.get("arguments") or "{}"
-                try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else {}
-                except json.JSONDecodeError:
-                    args = {}
-                if not isinstance(args, dict):
-                    args = {}
+                args = _parse_tool_arguments(fn.get("arguments"))
                 act = str(args.get("action") or "fold").lower()
                 amt = args.get("amount")
                 ai = None if amt is None else int(amt)
@@ -263,7 +372,15 @@ def decide_anthropic(
         lambda name, args: pt.execute_tool(name, state, player_id, args)
     )
 
-    for _ in range(max_rounds):
+    to = _http_timeout()
+    hb = _heartbeat_interval()
+    hb_note = f"{hb:.0f}s between lines" if hb > 0 else "off"
+    for rnd in range(max_rounds):
+        sys.stderr.write(
+            f"[llm-step] decide round {rnd + 1}/{max_rounds} → POST messages "
+            f"(timeout {to:.0f}s/call; in-call progress {hb_note})…\n"
+        )
+        sys.stderr.flush()
         body = {
             "model": model,
             "max_tokens": 4096,
@@ -272,6 +389,10 @@ def decide_anthropic(
             "messages": messages,
         }
         data = _post_json(url, headers, body)
+        if isinstance(data, dict) and data.get("type") == "error":
+            err = data.get("error") or {}
+            msg = err.get("message") if isinstance(err, dict) else str(data)
+            raise RuntimeError(f"Anthropic API error: {msg}")
         content = data.get("content") or []
         stop_reason = data.get("stop_reason")
         tool_uses = [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"]

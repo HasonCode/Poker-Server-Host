@@ -17,6 +17,46 @@
   font-weight: 600;
 }
 
+.llm-thought-panel {
+  margin: 0 0 1rem 0;
+}
+
+.llm-thought-panel:not(.hidden) {
+  align-self: stretch;
+}
+
+.llm-thought-summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.35rem 0;
+  list-style-position: outside;
+}
+
+.llm-thought-panel[open] .llm-thought-summary {
+  margin-bottom: 0.5rem;
+}
+
+.llm-thought-hint {
+  font-weight: normal;
+  opacity: 0.85;
+}
+
+.llm-thought-pre {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: min(42vh, 28rem);
+  overflow: auto;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  color: #cbd5e1;
+}
+
 /* Monologue feed — distinct hues, light text on dark table UI */
 .llm-monologue-panel h2 {
   margin-bottom: 0.35rem;

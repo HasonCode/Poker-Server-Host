@@ -38,6 +38,9 @@
         <button type="button" class="btn btn-sm btn-accent llm-step-btn hidden" id="llmStepBtn" title="Run the current actor LLM once: tools + action + transcript monologue (server runs python3 -m llm_players --single-step)">
           Run AI turn
         </button>
+        <button type="button" class="btn btn-sm hidden" id="llmStepCancelBtn" title="Stop waiting in the browser (does not kill the server subprocess)">
+          Cancel wait
+        </button>
         <button type="button" class="btn btn-sm" id="logoutSpectateBtn" title="Clear saved password">
           Lock
         </button>
@@ -61,6 +64,11 @@
     </section>
 
     <div id="spectateMain" class="hidden">
+      <details class="panel llm-thought-panel hidden" id="llmThoughtPanel">
+        <summary class="llm-thought-summary">LLM run log <span class="sub llm-thought-hint">(live stderr from llm_players — tools + API waits)</span></summary>
+        <pre class="llm-thought-pre" id="llmThoughtPre" aria-live="polite"></pre>
+      </details>
+
       <section class="panel your-panel spectate-strip">
         <h2>LLM spectator</h2>
         <p class="sub" id="stripMeta">Step mode: use Next snapshot to advance. Turn on Live for auto-updates.</p>
