@@ -166,19 +166,23 @@ local function detect_lang(filename, content)
   return "python"
 end
 
-local function spawn_bot(root, lang, bot_file, player_id, table_id, port)
+local function spawn_bot(root, lang, bot_file, player_id, table_id, port, chips)
   local cmd
   local url = "http://127.0.0.1:" .. tostring(port)
+  local stack = math.floor(tonumber(chips) or 500)
+  if stack < 1 then
+    stack = 500
+  end
   if lang == "lua" then
     cmd = string.format(
-      "lua -e 'package.path=\"%s/src/?.lua;%s/src/?/init.lua;\"..package.path' %q --name %q --url %q 2>&1 &\necho $!",
-      root, root, bot_file, player_id, url
+      "lua -e 'package.path=\"%s/src/?.lua;%s/src/?/init.lua;\"..package.path' %q --name %q --url %q --chips %d 2>&1 &\necho $!",
+      root, root, bot_file, player_id, url, stack
     )
   else
     cmd = string.format(
-      "python3 %q %q --name %q --table %q --url %q 2>&1 &\necho $!",
+      "python3 %q %q --name %q --table %q --url %q --chips %d 2>&1 &\necho $!",
       root .. "/clients/python/bot_runner.py",
-      bot_file, player_id, table_id, url
+      bot_file, player_id, table_id, url, stack
     )
   end
   local h = io.popen(cmd, "r")
@@ -325,6 +329,13 @@ local function table_snapshot(ctx)
   snap.zero_chips = ctx.zero_chips
   snap.rebuy_amount = ctx.rebuy_amount
   snap.manual_start_only = ctx.manual_start_only == true
+  local busts = {}
+  if ctx.bust_counts then
+    for pid, n in pairs(ctx.bust_counts) do
+      busts[tostring(pid)] = n
+    end
+  end
+  snap.bust_counts = busts
   return snap
 end
 
@@ -395,7 +406,6 @@ local function run_http()
   --- @return "ok", body_tbl | "defer" | "error", err_pack
   local function try_join_seat(c, j)
     local player_id = tostring(j.player_id)
-    local chips = tonumber(j.chips)
     if c.tbl:seat_for_player(player_id) then
       local tok = c.player_tokens[player_id]
       if tok then
@@ -434,10 +444,14 @@ local function run_http()
     if c.hand.status ~= "idle" and not c.allow_mid_hand_join then
       return "defer"
     end
+    local stack = math.floor(tonumber(c.rebuy_amount) or 500)
+    if stack < 1 then
+      stack = 500
+    end
     local ok, err = c.tbl:seat_player({
       seat = seat,
       player_id = player_id,
-      chips = chips,
+      chips = stack,
     })
     if not ok then
       if err == "seat_taken" or err == "table_full" then
@@ -851,6 +865,7 @@ local function run_http()
           max_seats = ctx.tbl.max_seats,
           seated = ctx.tbl:occupied_count(),
           hand_status = ctx.hand.status,
+          rebuy_amount = ctx.rebuy_amount,
         }
       end
     end
@@ -1085,18 +1100,17 @@ local function run_http()
         "400 Bad Request",
         api.error_body(
           "bad_request",
-          "JSON body required with player_id and chips; seat is optional (first free seat if omitted).",
-          { fields = { "player_id", "chips", "seat" } }
+          "JSON body required with player_id; seat is optional (first free seat if omitted). Starting stack is set by the table (rebuy_amount).",
+          { fields = { "player_id", "seat" } }
         ),
       }
     end
     local j = req.json
     local player_id = j.player_id
-    local chips = j.chips ~= nil and tonumber(j.chips) or nil
-    if not player_id or chips == nil then
+    if not player_id then
       return {
         "400 Bad Request",
-        api.error_body("bad_request", "player_id and chips are required."),
+        api.error_body("bad_request", "player_id is required."),
       }
     end
     local kind, payload = try_join_seat(c, j)
@@ -1207,12 +1221,16 @@ local function run_http()
     if type(req.json) ~= "table" then
       return {
         "400 Bad Request",
-        api.error_body("bad_request", "JSON body required with player_id, chips, and code (file contents)."),
+        api.error_body("bad_request", "JSON body required with player_id and code (file contents). Starting stack follows the table rebuy_amount."),
       }
     end
     local j = req.json
     local player_id = j.player_id
-    local chips = tonumber(j.chips or 500) or 500
+    local stack = math.floor(tonumber(c.rebuy_amount) or 500)
+    if stack < 1 then
+      stack = 500
+    end
+    local chips = stack
     local code = j.code
     local filename = j.filename or "bot.py"
     if not player_id or player_id == "" then
@@ -1252,7 +1270,7 @@ local function run_http()
     f:close()
 
     local port = tonumber(os.getenv("POKER_PORT") or "8080") or 8080
-    local pid = spawn_bot(root, lang, bot_path, player_id, params.table_id, port)
+    local pid = spawn_bot(root, lang, bot_path, player_id, params.table_id, port, chips)
     if not pid then
       return {
         "500 Internal Server Error",
@@ -1644,7 +1662,7 @@ local function run_http()
     c.hand:_reset_between_hands()
     c.action_queue = {}
 
-    local default_chips = (req.json and tonumber(req.json.chips)) or 1000
+    local default_chips = (req.json and tonumber(req.json.chips)) or math.floor(tonumber(c.rebuy_amount) or 1000)
     for i = 1, c.tbl.max_seats do
       local si = c.tbl:get_seat(i)
       if si then
@@ -1701,7 +1719,7 @@ local function run_http()
     if not sess then return err2 end
 
     if type(req.json) ~= "table" then
-      return { "400 Bad Request", api.error_body("bad_request", "JSON body required with table_id, player_id, chips, code.") }
+      return { "400 Bad Request", api.error_body("bad_request", "JSON body required with table_id, player_id, code.") }
     end
     local j = req.json
     local tid = tostring(j.table_id or "demo")
@@ -1709,7 +1727,6 @@ local function run_http()
     if not c then return not_found_table end
 
     local player_id = tostring(j.player_id or "")
-    local chips = tonumber(j.chips or 500) or 500
     local code = j.code or ""
     local filename = j.filename or "bot.py"
 
@@ -1739,7 +1756,11 @@ local function run_http()
     f:close()
 
     local port2 = tonumber(os.getenv("POKER_PORT") or "8080") or 8080
-    local pid = spawn_bot(root, lang, bot_path, player_id, tid, port2)
+    local stack2 = math.floor(tonumber(c.rebuy_amount) or 500)
+    if stack2 < 1 then
+      stack2 = 500
+    end
+    local pid = spawn_bot(root, lang, bot_path, player_id, tid, port2, stack2)
     if not pid then
       return { "500 Internal Server Error", api.error_body("internal", "Failed to spawn bot.") }
     end

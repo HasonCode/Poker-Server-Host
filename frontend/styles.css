@@ -450,6 +450,13 @@ body.spectate-mode .felt-seat.spectate-ghost.occupied {
   margin-top: 0.15rem;
 }
 
+.fs-buyin {
+  font-size: 0.68rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  margin-top: 0.1rem;
+}
+
 /* bet chips floating on felt */
 .felt-bet {
   position: absolute;

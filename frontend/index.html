@@ -31,9 +31,10 @@
         <label class="field"><span>Name</span>
           <input type="text" id="joinName" value="" placeholder="Your name" required />
         </label>
-        <label class="field"><span>Chips</span>
-          <input type="number" id="joinChips" value="500" min="1" required />
-        </label>
+        <p class="sub join-stack-line" id="joinStackLine">
+          Starting stack (table): <strong class="mono" id="joinStackHint">—</strong> chips
+          <span class="sub"> — set in admin as “rebuy / starting stack” for this table.</span>
+        </p>
         <button type="submit" class="btn btn-accent" id="joinSubmit">Join table</button>
       </form>
       <p class="sub join-hint" id="joinHint">
@@ -116,9 +117,7 @@
           <label class="field"><span>Bot name</span>
             <input type="text" id="botName" value="" placeholder="MyBot" />
           </label>
-          <label class="field"><span>Chips</span>
-            <input type="number" id="botChips" value="500" min="1" />
-          </label>
+          <p class="sub bot-stack-note">Bot uses the same starting stack as the table (rebuy amount).</p>
           <label class="field file-field"><span>Bot file (.py / .lua)</span>
             <input type="file" id="botFile" accept=".py,.lua" />
           </label>

@@ -14,7 +14,7 @@
   const joinPanel      = $("#joinPanel");
   const joinForm       = $("#joinForm");
   const joinName       = $("#joinName");
-  const joinChips      = $("#joinChips");
+  const joinStackHint  = $("#joinStackHint");
   const joinErr        = $("#joinErr");
   const joinSubmit     = $("#joinSubmit");
   const joinWaitModal  = $("#joinWaitModal");
@@ -42,7 +42,6 @@
   const actErr         = $("#actErr");
 
   const botNameInput   = $("#botName");
-  const botChipsInput  = $("#botChips");
   const botFileInput   = $("#botFile");
   const botUploadStart = $("#botUploadStart");
   const botUploadStop  = $("#botUploadStop");
@@ -59,6 +58,9 @@
   let lastData = null;
   let pollTimer = null;
   let activeBotName = null;
+  /** While it is your turn, avoid resetting #raiseAmt every poll when the player is editing. */
+  let lastRaiseDraftContext = null;
+  let raiseAmtUserEdited = false;
 
   const urlParams = new URLSearchParams(location.search);
   if (urlParams.get("table")) tableIdInput.value = urlParams.get("table");
@@ -97,6 +99,28 @@
   /* ── helpers ──────────────────────────────────────── */
 
   function tableId() { return (tableIdInput.value || "demo").trim() || "demo"; }
+
+  function updateJoinStackHint() {
+    if (!joinStackHint) return;
+    const tid = tableId();
+    apiFetch("GET", "/v1/tables")
+      .then(function (data) {
+        const t = (data.tables || []).find(function (x) { return x.table_id === tid; });
+        if (t && t.rebuy_amount != null) {
+          return t.rebuy_amount;
+        }
+        return apiFetch("GET", apiBase(tid) + "/state").then(function (st) {
+          return st && st.rebuy_amount != null ? st.rebuy_amount : null;
+        });
+      })
+      .then(function (amt) {
+        if (!joinStackHint) return;
+        joinStackHint.textContent = amt != null ? String(amt) : "—";
+      })
+      .catch(function () {
+        if (joinStackHint) joinStackHint.textContent = "—";
+      });
+  }
 
   function apiBase(tid) {
     return "/v1/tables/" + encodeURIComponent(tid || tableId());
@@ -242,8 +266,14 @@
       if (hand.button_seat === mySeat) tags.push("BTN");
       if (hand.sb_seat === mySeat)     tags.push("SB");
       if (hand.bb_seat === mySeat)     tags.push("BB");
-      yourMetaEl.textContent = "Seat " + mySeat + " · " + (seatInfo ? seatInfo.stack : "?") + " chips"
-        + (tags.length ? " · " + tags.join(" ") : "");
+      const bustMap = data.bust_counts || {};
+      const bustN = bustMap[playerId] != null ? bustMap[playerId] : 0;
+      const buyInNum = bustN + 1;
+      yourMetaEl.textContent =
+        "Seat " + mySeat +
+        " · " + (seatInfo ? seatInfo.stack : "?") + " chips" +
+        " · Buy-in #" + buyInNum +
+        (tags.length ? " · " + tags.join(" ") : "");
 
       yourCardsEl.replaceChildren();
       const hc = hand.hole_cards || {};
@@ -322,7 +352,26 @@
       const mri = hand.min_raise_increment || 0;
       const myContrib = getContrib(hand, mySeat);
       const suggestRaise = Math.max(cb + mri, myContrib + mri);
-      raiseAmtInput.value = suggestRaise;
+      const ctx =
+        String(hand.street || "") +
+        "|" +
+        cb +
+        "|" +
+        mri +
+        "|" +
+        myContrib;
+      if (ctx !== lastRaiseDraftContext) {
+        lastRaiseDraftContext = ctx;
+        raiseAmtUserEdited = false;
+        raiseAmtInput.value = String(suggestRaise);
+        raiseAmtInput.min = String(Math.max(1, suggestRaise));
+      } else if (!raiseAmtUserEdited && document.activeElement !== raiseAmtInput) {
+        raiseAmtInput.value = String(suggestRaise);
+        raiseAmtInput.min = String(Math.max(1, suggestRaise));
+      }
+    } else {
+      lastRaiseDraftContext = null;
+      raiseAmtUserEdited = false;
     }
 
     /* log */
@@ -357,6 +406,7 @@
     const max = data.max_seats || 10;
     const seats = data.seats || [];
     const hand = data.hand || {};
+    const bustCounts = data.bust_counts || {};
     const holeCards = hand.hole_cards || {};
     const folded = hand.folded || {};
 
@@ -388,6 +438,13 @@
         name.className = "fs-name";
         name.textContent = s.player_id + (i === mySeat ? " (you)" : "");
         el.appendChild(name);
+
+        const bustN = bustCounts[s.player_id] != null ? bustCounts[s.player_id] : 0;
+        const buyInNum = bustN + 1;
+        const buyInEl = document.createElement("div");
+        buyInEl.className = "fs-buyin";
+        buyInEl.textContent = "Buy-in #" + buyInNum;
+        el.appendChild(buyInEl);
 
         const stack = document.createElement("div");
         stack.className = "fs-stack";
@@ -576,9 +633,7 @@
     e.preventDefault();
     joinErr.textContent = "";
     const name = joinName.value.trim();
-    const chips = parseInt(joinChips.value, 10);
     if (!name) { joinErr.textContent = "Name is required."; return; }
-    if (!chips || chips < 1) { joinErr.textContent = "Chips must be at least 1."; return; }
     if (joinAbortController) {
       joinAbortController.abort();
     }
@@ -587,7 +642,7 @@
     if (joinSubmit) joinSubmit.disabled = true;
     showJoinWaitModal();
     try {
-      const data = await apiFetch("POST", apiBase() + "/join", { player_id: name, chips }, ac.signal);
+      const data = await apiFetch("POST", apiBase() + "/join", { player_id: name }, ac.signal);
       playerId = name;
       playerToken = data.token || null;
       renderAll(data.table || {});
@@ -675,14 +730,12 @@
     const file = botFileInput.files[0];
     if (!file) { botStatusEl.textContent = "Select a .py or .lua file first."; return; }
     const name = (botNameInput.value || "").trim() || file.name.replace(/\.\w+$/, "");
-    const chips = parseInt(botChipsInput.value, 10) || 500;
     botStatusEl.textContent = "Reading file…";
 
     const code = await file.text();
     try {
       const resp = await apiFetch("POST", apiBase() + "/bot/start", {
         player_id: name,
-        chips,
         code,
         filename: file.name,
       });
@@ -783,6 +836,7 @@
       if (spectateMode) {
         ensureTableOption(tableId());
       }
+      updateJoinStackHint();
     } catch { /* keep current options */ }
   }
 
@@ -793,8 +847,15 @@
 
   /* ── init ─────────────────────────────────────────── */
 
+  if (raiseAmtInput) {
+    raiseAmtInput.addEventListener("input", function () {
+      raiseAmtUserEdited = true;
+    });
+  }
+
   refreshBtn.addEventListener("click", () => { loadTableList(); poll(); refreshBotList(); });
   tableIdInput.addEventListener("change", () => {
+    updateJoinStackHint();
     if (playerId) startPoll();
     else if (spectateMode) startPoll();
     else poll();
@@ -812,6 +873,7 @@
   }
 
   loadTableList().then(() => {
+    updateJoinStackHint();
     if (spectateMode) {
       ensureTableOption(tableId());
       startPoll();
