@@ -257,7 +257,12 @@ def main() -> None:
         help="Server base URL (default: $POKER_URL or http://127.0.0.1:8080)",
     )
     p.add_argument("--name", default="Hason", help="Player name (default: Hason)")
-    p.add_argument("--chips", type=int, default=500, help="Starting chips (default: 500)")
+    p.add_argument(
+        "--chips",
+        type=int,
+        default=None,
+        help="Optional; server uses each table's buy_in_chips.",
+    )
     args = p.parse_args()
 
     player = args.name
@@ -269,7 +274,8 @@ def main() -> None:
         seats = state.get("seats", [])
         for i, s in enumerate(seats, 1):
             if isinstance(s, dict) and s.get("player_id") == player:
-                print(f"Joined table '{TABLE}' at seat {i} with {args.chips} chips.")
+                stk = s.get("stack", "?")
+                print(f"Joined table '{TABLE}' at seat {i} with {stk} chips (table buy-in).")
                 break
     except PokerError as e:
         print(f"Could not join: {e.api_code} — {e.message}", file=sys.stderr)

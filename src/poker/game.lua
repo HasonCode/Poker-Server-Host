@@ -94,6 +94,7 @@ function HandState:snapshot_public()
     sb_seat = self.sb_seat,
     bb_seat = self.bb_seat,
     action_to_seat = self.action_to_seat,
+    action_seq = self.seq,
     current_bet = self.current_bet,
     min_raise_increment = min_inc,
     contribution = seat_map_to_json(self.contribution),

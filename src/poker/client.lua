@@ -138,12 +138,14 @@ function M:get_table_state(table_id)
   return self:_request("GET", path_table_state(table_id))
 end
 
---- @param args { seat?: number, player_id: string, chips: number }
+--- @param args { seat?: number, player_id: string, chips?: number }
 function M:join_table(table_id, args)
   local body = {
     player_id = args.player_id,
-    chips = args.chips,
   }
+  if args.chips ~= nil then
+    body.chips = args.chips
+  end
   if args.seat ~= nil then
     body.seat = args.seat
   end

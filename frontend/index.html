@@ -31,9 +31,7 @@
         <label class="field"><span>Name</span>
           <input type="text" id="joinName" value="" placeholder="Your name" required />
         </label>
-        <label class="field"><span>Chips</span>
-          <input type="number" id="joinChips" value="500" min="1" required />
-        </label>
+        <p class="sub" id="joinBuyInInfo">Select a table to see the buy-in.</p>
         <button type="submit" class="btn btn-accent" id="joinSubmit">Join table</button>
       </form>
       <p class="sub join-hint" id="joinHint">
@@ -103,6 +101,7 @@
           <label class="field"><span>Raise to (total street)</span>
             <input type="number" id="raiseAmt" min="1" value="10" />
           </label>
+          <span class="sub" id="actionTimerHint" aria-live="polite"></span>
         </div>
         <p class="err" id="actErr"></p>
       </section>
@@ -115,9 +114,6 @@
         <div class="bot-upload-row">
           <label class="field"><span>Bot name</span>
             <input type="text" id="botName" value="" placeholder="MyBot" />
-          </label>
-          <label class="field"><span>Chips</span>
-            <input type="number" id="botChips" value="500" min="1" />
           </label>
           <label class="field file-field"><span>Bot file (.py / .lua)</span>
             <input type="file" id="botFile" accept=".py,.lua" />

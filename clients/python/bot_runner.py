@@ -119,7 +119,7 @@ def run_bot(
     url: str = "http://127.0.0.1:8080",
     table_id: str = "demo",
     player_id: str = "PythonBot",
-    chips: int = 500,
+    chips: Optional[int] = None,
     max_hands: Optional[int] = None,
     poll_interval: float = 0.5,
     verbose: bool = True,
@@ -145,7 +145,7 @@ def run_bot(
     state = resp.get("table", {})
     me = _build_me(state, player_id)
     if verbose:
-        print(f"[bot] Seated at seat {me['seat']} with {chips} chips")
+        print(f"[bot] Seated at seat {me['seat']} with {me.get('stack', '?')} chips")
 
     hands_played = 0
     try:
@@ -226,7 +226,12 @@ def main() -> None:
     p.add_argument("--url", default=default_url, help="Server URL")
     p.add_argument("--table", default="demo", help="Table ID")
     p.add_argument("--name", default="PythonBot", help="Player name")
-    p.add_argument("--chips", type=int, default=500, help="Starting chips")
+    p.add_argument(
+        "--chips",
+        type=int,
+        default=None,
+        help="Deprecated: ignored by server; table buy_in_chips is used.",
+    )
     p.add_argument("--hands", type=int, default=None, help="Max hands to play")
     p.add_argument("-q", "--quiet", action="store_true", help="Less output")
     args = p.parse_args()
@@ -241,7 +246,7 @@ def main() -> None:
         url=args.url,
         table_id=args.table,
         player_id=args.name,
-        chips=args.chips,
+        chips=args.chips,  # optional; server uses table buy-in
         max_hands=args.hands,
         verbose=not args.quiet,
     )

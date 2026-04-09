@@ -14,7 +14,7 @@
   const joinPanel      = $("#joinPanel");
   const joinForm       = $("#joinForm");
   const joinName       = $("#joinName");
-  const joinChips      = $("#joinChips");
+  const joinBuyInInfo  = $("#joinBuyInInfo");
   const joinErr        = $("#joinErr");
   const joinSubmit     = $("#joinSubmit");
   const joinWaitModal  = $("#joinWaitModal");
@@ -40,9 +40,9 @@
   const actionBtns     = $("#actionBtns");
   const raiseAmtInput  = $("#raiseAmt");
   const actErr         = $("#actErr");
+  const actionTimerHint = $("#actionTimerHint");
 
   const botNameInput   = $("#botName");
-  const botChipsInput  = $("#botChips");
   const botFileInput   = $("#botFile");
   const botUploadStart = $("#botUploadStart");
   const botUploadStop  = $("#botUploadStop");
@@ -59,6 +59,8 @@
   let lastData = null;
   let pollTimer = null;
   let activeBotName = null;
+  let wasMyTurn = false;
+  const tableBuyIns = Object.create(null);
 
   const urlParams = new URLSearchParams(location.search);
   if (urlParams.get("table")) tableIdInput.value = urlParams.get("table");
@@ -217,6 +219,21 @@
   function renderAll(data) {
     lastData = data;
     mySeat = findMySeat(data);
+
+    if (!spectateMode && playerId && !mySeat) {
+      resetClientState();
+      if (joinErr) {
+        joinErr.textContent =
+          "You are no longer seated (kicked, action timeout, or table reset). Rejoin with your name if a seat is free.";
+      }
+      updateJoinBuyInHint();
+      return;
+    }
+
+    if (data.buy_in_chips != null) {
+      tableBuyIns[data.table_id || tableId()] = data.buy_in_chips;
+    }
+
     const hand = data.hand || {};
 
     if (spectateMode) {
@@ -322,7 +339,21 @@
       const mri = hand.min_raise_increment || 0;
       const myContrib = getContrib(hand, mySeat);
       const suggestRaise = Math.max(cb + mri, myContrib + mri);
-      raiseAmtInput.value = suggestRaise;
+      if (!wasMyTurn) {
+        raiseAmtInput.value = suggestRaise;
+      }
+    }
+    wasMyTurn = myTurn;
+
+    if (actionTimerHint) {
+      if (myTurn && data.action_timeout_sec > 0 && data.action_deadline_remaining_sec != null) {
+        const rem = data.action_deadline_remaining_sec;
+        const mode = data.action_timeout_mode === "fold_only" ? "auto-fold" : "eject";
+        actionTimerHint.textContent =
+          "~" + rem + "s to act (" + mode + " if time runs out).";
+      } else {
+        actionTimerHint.textContent = "";
+      }
     }
 
     /* log */
@@ -332,6 +363,10 @@
     connState.textContent = spectateMode ? "Spectating (admin)" : "Connected";
     connState.className = "sub";
     endpointEl.textContent = spectateMode ? spectateStateUrl() : apiBase() + "/state";
+
+    if (!spectateMode && !playerId) {
+      updateJoinBuyInHint();
+    }
   }
 
   function getContrib(hand, seat) {
@@ -524,6 +559,7 @@
     playerToken = null;
     mySeat = null;
     lastData = null;
+    wasMyTurn = false;
     activeBotName = null;
     botUploadStart.disabled = false;
     botUploadStop.disabled = true;
@@ -576,9 +612,7 @@
     e.preventDefault();
     joinErr.textContent = "";
     const name = joinName.value.trim();
-    const chips = parseInt(joinChips.value, 10);
     if (!name) { joinErr.textContent = "Name is required."; return; }
-    if (!chips || chips < 1) { joinErr.textContent = "Chips must be at least 1."; return; }
     if (joinAbortController) {
       joinAbortController.abort();
     }
@@ -587,7 +621,7 @@
     if (joinSubmit) joinSubmit.disabled = true;
     showJoinWaitModal();
     try {
-      const data = await apiFetch("POST", apiBase() + "/join", { player_id: name, chips }, ac.signal);
+      const data = await apiFetch("POST", apiBase() + "/join", { player_id: name }, ac.signal);
       playerId = name;
       playerToken = data.token || null;
       renderAll(data.table || {});
@@ -682,7 +716,6 @@
     try {
       const resp = await apiFetch("POST", apiBase() + "/bot/start", {
         player_id: name,
-        chips,
         code,
         filename: file.name,
       });
@@ -772,11 +805,16 @@
       const prev = tableIdInput.value;
       tableIdInput.replaceChildren();
       tables.forEach(t => {
+        if (t.buy_in_chips != null) {
+          tableBuyIns[t.table_id] = t.buy_in_chips;
+        }
         const opt = document.createElement("option");
         opt.value = t.table_id;
-        opt.textContent = t.table_id + " (" + t.seated + "/" + t.max_seats + ")";
+        const bi = t.buy_in_chips != null ? " · buy-in " + t.buy_in_chips : "";
+        opt.textContent = t.table_id + " (" + t.seated + "/" + t.max_seats + ")" + bi;
         tableIdInput.appendChild(opt);
       });
+      updateJoinBuyInHint();
       if (tables.find(t => t.table_id === prev)) {
         tableIdInput.value = prev;
       }
@@ -791,10 +829,21 @@
     tableListTimer = setInterval(loadTableList, TABLE_LIST_INTERVAL);
   }
 
+  function updateJoinBuyInHint() {
+    if (!joinBuyInInfo) return;
+    const tid = tableId();
+    const bi = tableBuyIns[tid];
+    joinBuyInInfo.textContent =
+      bi != null
+        ? "Buy-in for this table: " + bi + " chips (set by the host)."
+        : "Select a table to see the buy-in.";
+  }
+
   /* ── init ─────────────────────────────────────────── */
 
   refreshBtn.addEventListener("click", () => { loadTableList(); poll(); refreshBotList(); });
   tableIdInput.addEventListener("change", () => {
+    updateJoinBuyInHint();
     if (playerId) startPoll();
     else if (spectateMode) startPoll();
     else poll();

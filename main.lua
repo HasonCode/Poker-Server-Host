@@ -66,10 +66,29 @@ local function create_table_context(id, max_seats, opts)
   local game = poker.game
   local tbl = new_table({ id = id, max_seats = max_seats or 10 })
   local ai_players = {}
+  local env_buy = tonumber(os.getenv("POKER_DEFAULT_BUY_IN"))
+  local buy_in = opts.buy_in_chips or env_buy or 500
+  buy_in = math.max(1, math.floor(tonumber(buy_in) or 500))
+  local env_at = tonumber(os.getenv("POKER_ACTION_TIMEOUT_SEC"))
+  local action_timeout_sec = opts.action_timeout_sec
+  if action_timeout_sec == nil then
+    action_timeout_sec = env_at
+  end
+  if action_timeout_sec == nil then
+    action_timeout_sec = 60
+  end
+  action_timeout_sec = math.floor(tonumber(action_timeout_sec) or 60)
+  if action_timeout_sec < 0 then
+    action_timeout_sec = 0
+  end
+  local action_timeout_mode = opts.action_timeout_mode or "eject"
+  if action_timeout_mode ~= "eject" and action_timeout_mode ~= "fold_only" then
+    action_timeout_mode = "eject"
+  end
   if opts.with_ais then
     for i = 1, math.min(6, max_seats or 10) do
       local pid = "ai_" .. i
-      tbl:seat_player({ seat = i, player_id = pid, chips = opts.ai_chips or 1000 })
+      tbl:seat_player({ seat = i, player_id = pid, chips = buy_in })
       ai_players[pid] = true
     end
   end
@@ -84,11 +103,16 @@ local function create_table_context(id, max_seats, opts)
     ai_players = ai_players,
     action_queue = {},
     _prev_hand_status = nil,
+    _act_turn_key = nil,
+    _act_deadline = nil,
     running_bots = {},
     player_tokens = {},
     token_to_player = {},
     zero_chips = opts.zero_chips or "rebuy",
     rebuy_amount = opts.rebuy_amount or 500,
+    buy_in_chips = buy_in,
+    action_timeout_sec = action_timeout_sec,
+    action_timeout_mode = action_timeout_mode,
     bust_counts = {}, -- player_id -> times reached 0 chips at end of hand (eject or rebuy)
     hidden = opts.hidden == true, -- if true, omitted from GET /v1/tables public list
   }
@@ -138,8 +162,12 @@ end
 local function create_server_state()
   return {
     tables = {
-      demo = create_table_context("demo", 10, { with_ais = true }),
-      players = create_table_context("players", 10, {}),
+      demo = create_table_context("demo", 10, {
+        with_ais = true,
+        buy_in_chips = 1000,
+        hidden = true, -- omit from GET /v1/tables; admins still see it in /admin/api/tables
+      }),
+      players = create_table_context("players", 10, { buy_in_chips = 500, zero_chips = "rebuy" }),
     },
     pending_joins = {},
   }
@@ -155,19 +183,20 @@ local function detect_lang(filename, content)
   return "python"
 end
 
-local function spawn_bot(root, lang, bot_file, player_id, table_id, port)
+local function spawn_bot(root, lang, bot_file, player_id, table_id, port, buy_in_chips)
+  buy_in_chips = math.max(1, math.floor(tonumber(buy_in_chips) or 500))
   local cmd
   local url = "http://127.0.0.1:" .. tostring(port)
   if lang == "lua" then
     cmd = string.format(
-      "lua -e 'package.path=\"%s/src/?.lua;%s/src/?/init.lua;\"..package.path' %q --name %q --url %q 2>&1 &\necho $!",
-      root, root, bot_file, player_id, url
+      "lua -e 'package.path=\"%s/src/?.lua;%s/src/?/init.lua;\"..package.path' %q --name %q --url %q --chips %d 2>&1 &\necho $!",
+      root, root, bot_file, player_id, url, buy_in_chips
     )
   else
     cmd = string.format(
-      "python3 %q %q --name %q --table %q --url %q 2>&1 &\necho $!",
+      "python3 %q %q --name %q --table %q --url %q --chips %d 2>&1 &\necho $!",
       root .. "/clients/python/bot_runner.py",
-      bot_file, player_id, table_id, url
+      bot_file, player_id, table_id, url, buy_in_chips
     )
   end
   local h = io.popen(cmd, "r")
@@ -277,6 +306,98 @@ local function submit_action(ctx, player_id, action, amount, queue)
   return "queued"
 end
 
+local function eject_action_timeout(ctx, player_id, seat)
+  local hand = ctx.hand
+  if hand.status == "active" and hand.action_to_seat == seat and not hand.folded[seat] then
+    local ok, err = hand:apply_action(ctx.tbl, player_id, "fold", nil)
+    if not ok then
+      io.stderr:write("[table:" .. ctx.tbl.id .. "] action timeout fold failed: " .. tostring(err) .. "\n")
+      hand.folded[seat] = true
+      hand.pending[seat] = nil
+      if hand.action_to_seat == seat then
+        hand:_after_action(ctx.tbl, seat)
+      end
+    end
+  end
+  ctx.tbl:leave_seat(seat)
+  if ctx.action_queue then
+    ctx.action_queue[player_id] = nil
+  end
+  remove_player_token(ctx, player_id)
+  if ctx.running_bots and ctx.running_bots[player_id] then
+    kill_bot(ctx.running_bots[player_id].pid)
+    ctx.running_bots[player_id] = nil
+  end
+  if ctx.ai_players then
+    ctx.ai_players[player_id] = nil
+  end
+end
+
+local function check_action_timeout(ctx)
+  local hand = ctx.hand
+  local sec = ctx.action_timeout_sec or 0
+  if sec <= 0 or hand.status ~= "active" or not hand.action_to_seat then
+    ctx._act_turn_key = nil
+    ctx._act_deadline = nil
+    return
+  end
+  local seat = hand.action_to_seat
+  local row = ctx.tbl:get_seat(seat)
+  if not row then
+    ctx._act_turn_key = nil
+    ctx._act_deadline = nil
+    return
+  end
+  local pid = row.player_id
+  if ctx.ai_players and ctx.ai_players[pid] then
+    ctx._act_turn_key = nil
+    ctx._act_deadline = nil
+    return
+  end
+
+  local key = tostring(seat) .. ":" .. tostring(hand.street) .. ":" .. tostring(hand.seq)
+  if ctx._act_turn_key ~= key then
+    ctx._act_turn_key = key
+    ctx._act_deadline = os.clock() + sec
+    return
+  end
+
+  if os.clock() < (ctx._act_deadline or math.huge) then
+    return
+  end
+
+  ctx._act_turn_key = nil
+  ctx._act_deadline = nil
+
+  local mode = ctx.action_timeout_mode or "eject"
+  io.stderr:write(
+    "[table:"
+      .. ctx.tbl.id
+      .. "] Action timeout ("
+      .. tostring(sec)
+      .. "s) for "
+      .. tostring(pid)
+      .. " mode="
+      .. tostring(mode)
+      .. "\n"
+  )
+
+  if mode == "fold_only" then
+    if hand.action_to_seat == seat and not hand.folded[seat] then
+      local ok, err = hand:apply_action(ctx.tbl, pid, "fold", nil)
+      if not ok then
+        io.stderr:write("[table:" .. ctx.tbl.id .. "] timeout fold_only failed: " .. tostring(err) .. "\n")
+      end
+    end
+    if ctx.action_queue then
+      ctx.action_queue[pid] = nil
+    end
+    return
+  end
+
+  eject_action_timeout(ctx, pid, seat)
+end
+
 local function handle_zero_chips(ctx)
   for i = 1, ctx.tbl.max_seats do
     local s = ctx.tbl:get_seat(i)
@@ -309,10 +430,28 @@ local function table_snapshot(ctx)
     handle_zero_chips(ctx)
   end
   ctx._prev_hand_status = h.status
+  check_action_timeout(ctx)
   ai.run_until_human(ctx)
   local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue)
   snap.zero_chips = ctx.zero_chips
   snap.rebuy_amount = ctx.rebuy_amount
+  snap.buy_in_chips = ctx.buy_in_chips
+  snap.action_timeout_sec = ctx.action_timeout_sec
+  snap.action_timeout_mode = ctx.action_timeout_mode
+  local hh = ctx.hand
+  if
+    ctx.action_timeout_sec
+    and ctx.action_timeout_sec > 0
+    and hh.status == "active"
+    and hh.action_to_seat
+    and ctx._act_deadline
+  then
+    local s = hh.action_to_seat
+    local r = ctx.tbl:get_seat(s)
+    if r and not (ctx.ai_players and ctx.ai_players[r.player_id]) then
+      snap.action_deadline_remaining_sec = math.max(0, math.ceil(ctx._act_deadline - os.clock()))
+    end
+  end
   return snap
 end
 
@@ -363,7 +502,6 @@ local function run_http()
   --- @return "ok", body_tbl | "defer" | "error", err_pack
   local function try_join_seat(c, j)
     local player_id = tostring(j.player_id)
-    local chips = tonumber(j.chips)
     if c.tbl:seat_for_player(player_id) then
       return "error", join_http_error("already_seated")
     end
@@ -393,10 +531,11 @@ local function run_http()
     if c.hand.status ~= "idle" then
       return "defer"
     end
+    local buy_in = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     local ok, err = c.tbl:seat_player({
       seat = seat,
       player_id = player_id,
-      chips = chips,
+      chips = buy_in,
     })
     if not ok then
       if err == "seat_taken" or err == "table_full" then
@@ -534,6 +673,7 @@ local function run_http()
           max_seats = ctx.tbl.max_seats,
           seated = ctx.tbl:occupied_count(),
           hand_status = ctx.hand.status,
+          buy_in_chips = ctx.buy_in_chips,
         }
       end
     end
@@ -569,18 +709,17 @@ local function run_http()
         "400 Bad Request",
         api.error_body(
           "bad_request",
-          "JSON body required with player_id and chips; seat is optional (first free seat if omitted).",
-          { fields = { "player_id", "chips", "seat" } }
+          "JSON body required with player_id; seat is optional. Starting stack is the table buy_in_chips (see GET state).",
+          { fields = { "player_id", "seat" } }
         ),
       }
     end
     local j = req.json
     local player_id = j.player_id
-    local chips = j.chips ~= nil and tonumber(j.chips) or nil
-    if not player_id or chips == nil then
+    if not player_id or tostring(player_id) == "" then
       return {
         "400 Bad Request",
-        api.error_body("bad_request", "player_id and chips are required."),
+        api.error_body("bad_request", "player_id is required."),
       }
     end
     local kind, payload = try_join_seat(c, j)
@@ -691,12 +830,11 @@ local function run_http()
     if type(req.json) ~= "table" then
       return {
         "400 Bad Request",
-        api.error_body("bad_request", "JSON body required with player_id, chips, and code (file contents)."),
+        api.error_body("bad_request", "JSON body required with player_id and code (file contents). Bot buy-in matches the table."),
       }
     end
     local j = req.json
     local player_id = j.player_id
-    local chips = tonumber(j.chips or 500) or 500
     local code = j.code
     local filename = j.filename or "bot.py"
     if not player_id or player_id == "" then
@@ -736,7 +874,8 @@ local function run_http()
     f:close()
 
     local port = tonumber(os.getenv("POKER_PORT") or "8080") or 8080
-    local pid = spawn_bot(root, lang, bot_path, player_id, params.table_id, port)
+    local buy_in = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
+    local pid = spawn_bot(root, lang, bot_path, player_id, params.table_id, port, buy_in)
     if not pid then
       return {
         "500 Internal Server Error",
@@ -937,6 +1076,9 @@ local function run_http()
         bb_amount = ctx.hand.bb_amount,
         running_bots = bot_count,
         zero_chips = ctx.zero_chips,
+        buy_in_chips = ctx.buy_in_chips,
+        action_timeout_sec = ctx.action_timeout_sec,
+        action_timeout_mode = ctx.action_timeout_mode,
         hidden = ctx.hidden == true,
       }
     end
@@ -972,13 +1114,30 @@ local function run_http()
     local zc = j.zero_chips
     if zc ~= "eject" and zc ~= "rebuy" then zc = "rebuy" end
 
+    local buy_in = tonumber(j.buy_in_chips) or 500
+    buy_in = math.max(1, math.floor(buy_in))
+    local ats = j.action_timeout_sec
+    if ats == nil then
+      ats = tonumber(os.getenv("POKER_ACTION_TIMEOUT_SEC")) or 60
+    end
+    ats = math.floor(tonumber(ats) or 60)
+    if ats < 0 then
+      ats = 0
+    end
+    local atm = tostring(j.action_timeout_mode or "eject")
+    if atm ~= "eject" and atm ~= "fold_only" then
+      atm = "eject"
+    end
+
     s.tables[tid] = create_table_context(tid, max_seats, {
       with_ais = with_ais,
       sb_amount = math.max(1, math.floor(sb)),
       bb_amount = math.max(1, math.floor(bb)),
-      ai_chips = tonumber(j.ai_chips) or 1000,
+      buy_in_chips = buy_in,
       zero_chips = zc,
       rebuy_amount = tonumber(j.rebuy_amount) or 500,
+      action_timeout_sec = ats,
+      action_timeout_mode = atm,
       hidden = hidden,
     })
 
@@ -1053,6 +1212,9 @@ local function run_http()
       ai_players = c.ai_players,
       zero_chips = c.zero_chips,
       rebuy_amount = c.rebuy_amount,
+      buy_in_chips = c.buy_in_chips,
+      action_timeout_sec = c.action_timeout_sec,
+      action_timeout_mode = c.action_timeout_mode,
     }
   end)
 
@@ -1128,7 +1290,7 @@ local function run_http()
     c.hand:_reset_between_hands()
     c.action_queue = {}
 
-    local default_chips = (req.json and tonumber(req.json.chips)) or 1000
+    local default_chips = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     for i = 1, c.tbl.max_seats do
       local si = c.tbl:get_seat(i)
       if si then
@@ -1136,7 +1298,7 @@ local function run_http()
       end
     end
 
-    io.stderr:write("[admin] Table reset, stacks set to " .. default_chips .. "\n")
+    io.stderr:write("[admin] Table reset, stacks set to table buy-in " .. default_chips .. "\n")
     return { ok = true, table = table_snapshot(c) }
   end)
 
@@ -1168,15 +1330,41 @@ local function run_http()
       local ra = tonumber(j.rebuy_amount)
       if ra and ra >= 1 then c.rebuy_amount = math.floor(ra) end
     end
+    if j.buy_in_chips ~= nil then
+      local bi = tonumber(j.buy_in_chips)
+      if bi and bi >= 1 then c.buy_in_chips = math.floor(bi) end
+    end
+    if j.action_timeout_sec ~= nil then
+      local ats = tonumber(j.action_timeout_sec)
+      if ats then
+        ats = math.floor(ats)
+        if ats < 0 then
+          ats = 0
+        end
+        c.action_timeout_sec = ats
+      end
+    end
+    if j.action_timeout_mode ~= nil then
+      local atm = tostring(j.action_timeout_mode)
+      if atm == "eject" or atm == "fold_only" then
+        c.action_timeout_mode = atm
+      end
+    end
 
     io.stderr:write("[admin] Settings updated: SB=" .. c.hand.sb_amount .. " BB=" .. c.hand.bb_amount
-      .. " zero_chips=" .. c.zero_chips .. " rebuy=" .. tostring(c.rebuy_amount) .. "\n")
+      .. " zero_chips=" .. c.zero_chips .. " rebuy=" .. tostring(c.rebuy_amount)
+      .. " buy_in=" .. tostring(c.buy_in_chips)
+      .. " action_timeout=" .. tostring(c.action_timeout_sec) .. "s " .. tostring(c.action_timeout_mode)
+      .. "\n")
     return {
       ok = true,
       sb_amount = c.hand.sb_amount,
       bb_amount = c.hand.bb_amount,
       zero_chips = c.zero_chips,
       rebuy_amount = c.rebuy_amount,
+      buy_in_chips = c.buy_in_chips,
+      action_timeout_sec = c.action_timeout_sec,
+      action_timeout_mode = c.action_timeout_mode,
     }
   end)
 
@@ -1185,7 +1373,7 @@ local function run_http()
     if not sess then return err2 end
 
     if type(req.json) ~= "table" then
-      return { "400 Bad Request", api.error_body("bad_request", "JSON body required with table_id, player_id, chips, code.") }
+      return { "400 Bad Request", api.error_body("bad_request", "JSON body required with table_id, player_id, code.") }
     end
     local j = req.json
     local tid = tostring(j.table_id or "demo")
@@ -1193,7 +1381,6 @@ local function run_http()
     if not c then return not_found_table end
 
     local player_id = tostring(j.player_id or "")
-    local chips = tonumber(j.chips or 500) or 500
     local code = j.code or ""
     local filename = j.filename or "bot.py"
 
@@ -1223,7 +1410,8 @@ local function run_http()
     f:close()
 
     local port2 = tonumber(os.getenv("POKER_PORT") or "8080") or 8080
-    local pid = spawn_bot(root, lang, bot_path, player_id, tid, port2)
+    local buy_in = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
+    local pid = spawn_bot(root, lang, bot_path, player_id, tid, port2, buy_in)
     if not pid then
       return { "500 Internal Server Error", api.error_body("internal", "Failed to spawn bot.") }
     end

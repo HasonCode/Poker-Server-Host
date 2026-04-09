@@ -53,6 +53,18 @@
             <label class="field"><span>BB</span>
               <input type="number" id="newBB" value="5" min="1" />
             </label>
+            <label class="field"><span>Buy-in (stack)</span>
+              <input type="number" id="newBuyIn" value="500" min="1" title="Starting stack for joins, bots, and table reset" />
+            </label>
+            <label class="field"><span>Action timeout (sec)</span>
+              <input type="number" id="newActionTimeout" value="60" min="0" title="0 = off. Human actors only." />
+            </label>
+            <label class="field"><span>On timeout</span>
+              <select id="newActionTimeoutMode">
+                <option value="eject" selected>Eject from table</option>
+                <option value="fold_only">Auto-fold only (keep seat)</option>
+              </select>
+            </label>
             <label class="field"><span>Zero chips</span>
               <select id="newZeroChips">
                 <option value="rebuy" selected>Rebuy</option>
@@ -176,12 +188,22 @@
           <label class="field"><span>Rebuy amt</span>
             <input type="number" id="setRebuyAmt" min="1" value="500" />
           </label>
+          <label class="field"><span>Buy-in (stack)</span>
+            <input type="number" id="setBuyIn" min="1" value="500" title="Used for new joins, bots, and reset stacks" />
+          </label>
+          <label class="field"><span>Action timeout (sec)</span>
+            <input type="number" id="setActionTimeout" min="0" value="60" />
+          </label>
+          <label class="field"><span>On timeout</span>
+            <select id="setActionTimeoutMode">
+              <option value="eject">Eject from table</option>
+              <option value="fold_only">Auto-fold only</option>
+            </select>
+          </label>
           <button type="submit" class="btn btn-accent btn-sm">Update Settings</button>
         </form>
         <div class="reset-row">
-          <label class="field"><span>Reset chips to</span>
-            <input type="number" id="resetChips" min="1" value="1000" />
-          </label>
+          <p class="sub" id="resetBuyInNote">Reset sets every seated stack to the table buy-in and clears the current hand.</p>
           <button type="button" id="resetBtn" class="btn btn-danger btn-sm">Reset Table</button>
         </div>
         <p class="err" id="settingsErr"></p>
@@ -195,9 +217,6 @@
           <div class="bot-upload-row">
             <label class="field"><span>Bot name</span>
               <input type="text" id="adminBotName" placeholder="AdminBot" />
-            </label>
-            <label class="field"><span>Chips</span>
-              <input type="number" id="adminBotChips" value="500" min="1" />
             </label>
             <label class="field file-field"><span>Bot file (.py / .lua)</span>
               <input type="file" id="adminBotFile" accept=".py,.lua" />

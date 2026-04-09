@@ -32,13 +32,11 @@
   const setSB        = $("#setSB");
   const setBB        = $("#setBB");
   const resetBtn     = $("#resetBtn");
-  const resetChips   = $("#resetChips");
   const settingsErr  = $("#settingsErr");
 
   const botList      = $("#botList");
   const noBots       = $("#noBots");
   const adminBotName = $("#adminBotName");
-  const adminBotChips= $("#adminBotChips");
   const adminBotFile = $("#adminBotFile");
   const adminBotStart= $("#adminBotStart");
   const botErr       = $("#botErr");
@@ -177,7 +175,8 @@
         hiddenTag +
         '</span>' +
         '<span class="sub">' + t.seated + '/' + t.max_seats + ' seats · ' +
-        'SB/BB ' + t.sb_amount + '/' + t.bb_amount + ' · ' +
+        'SB/BB ' + t.sb_amount + '/' + t.bb_amount + ' · buy-in ' + (t.buy_in_chips ?? "—") +
+        ' · act ' + (t.action_timeout_sec != null ? t.action_timeout_sec + "s" : "—") + ' · ' +
         policyLabel + ' · ' + t.running_bots + ' bots</span>';
       div.addEventListener("click", () => selectTable(t.table_id));
       tablesList.appendChild(div);
@@ -214,6 +213,16 @@
       const setRebuyAmt = $("#setRebuyAmt");
       if (setZeroChips) setZeroChips.value = data.zero_chips || "rebuy";
       if (setRebuyAmt) setRebuyAmt.value = data.rebuy_amount || 500;
+      const setBuyIn = $("#setBuyIn");
+      const setActionTimeout = $("#setActionTimeout");
+      const setActionTimeoutMode = $("#setActionTimeoutMode");
+      if (setBuyIn) setBuyIn.value = data.buy_in_chips || 500;
+      if (setActionTimeout) {
+        setActionTimeout.value = data.action_timeout_sec != null ? data.action_timeout_sec : 60;
+      }
+      if (setActionTimeoutMode) {
+        setActionTimeoutMode.value = data.action_timeout_mode || "eject";
+      }
 
       renderPlayers(data.players || [], data.ai_players || {});
       renderBots(data.running_bots || []);
@@ -393,6 +402,12 @@
         hidden: $("#newHidden").checked,
         zero_chips: $("#newZeroChips").value,
         rebuy_amount: parseInt($("#newRebuyAmt").value, 10) || 500,
+        buy_in_chips: parseInt($("#newBuyIn").value, 10) || 500,
+        action_timeout_sec: (() => {
+          const v = parseInt($("#newActionTimeout").value, 10);
+          return Number.isFinite(v) ? v : 60;
+        })(),
+        action_timeout_mode: $("#newActionTimeoutMode").value,
       });
       selectedTable = tid;
       await loadTables();
@@ -466,6 +481,12 @@
         bb_amount: parseInt(setBB.value, 10),
         zero_chips: $("#setZeroChips").value,
         rebuy_amount: parseInt($("#setRebuyAmt").value, 10) || 500,
+        buy_in_chips: parseInt($("#setBuyIn").value, 10) || 500,
+        action_timeout_sec: (() => {
+          const v = parseInt($("#setActionTimeout").value, 10);
+          return Number.isFinite(v) ? v : 60;
+        })(),
+        action_timeout_mode: $("#setActionTimeoutMode").value,
       });
       await loadTables();
     } catch (err) {
@@ -478,9 +499,7 @@
     settingsErr.textContent = "";
     if (!confirm("Reset table '" + selectedTable + "'? This ends the hand and resets stacks.")) return;
     try {
-      await apiFetch("POST", "/admin/api/tables/" + encodeURIComponent(selectedTable) + "/reset", {
-        chips: parseInt(resetChips.value, 10) || 1000,
-      });
+      await apiFetch("POST", "/admin/api/tables/" + encodeURIComponent(selectedTable) + "/reset", {});
       await loadTables();
     } catch (err) {
       settingsErr.textContent = err.message;
@@ -521,11 +540,10 @@
     const file = adminBotFile.files[0];
     if (!file) { botErr.textContent = "Select a bot file first."; return; }
     const name = (adminBotName.value || "").trim() || file.name.replace(/\.\w+$/, "");
-    const chips = parseInt(adminBotChips.value, 10) || 500;
     const code = await file.text();
     try {
       await apiFetch("POST", "/admin/api/bot/start", {
-        table_id: selectedTable, player_id: name, chips, code, filename: file.name,
+        table_id: selectedTable, player_id: name, code, filename: file.name,
       });
       await loadTables();
     } catch (err) {

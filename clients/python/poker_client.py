@@ -213,11 +213,13 @@ class PokerClient:
         table_id: str,
         *,
         player_id: str,
-        chips: int,
+        chips: Optional[int] = None,
         seat: Optional[int] = None,
     ) -> Any:
-        """Take a seat. Body: player_id, chips; optional seat (first free seat if omitted)."""
-        body: dict[str, Any] = {"player_id": player_id, "chips": chips}
+        """Take a seat. Body: player_id; optional seat. Stack is the table buy_in_chips."""
+        body: dict[str, Any] = {"player_id": player_id}
+        if chips is not None:
+            body["chips"] = chips
         if seat is not None:
             body["seat"] = seat
         join_timeout = max(self.timeout, 150.0)
