@@ -262,6 +262,13 @@ function M:match_handler(method, path)
       return h, { table_id = id }
     end
   end
+  id = path:match("^/v1/tables/([^/]+)/table%-settings$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/table-settings"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
   id = path:match("^/v1/tables/([^/]+)/llm%-step$")
   if id and method == "POST" then
     local h = self.routes["POST /v1/tables/:id/llm-step"]

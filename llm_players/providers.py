@@ -128,6 +128,91 @@ def _normalize_base(url: str) -> str:
     return url.rstrip("/")
 
 
+def _openai_compat_coerce_root(parsed: Any) -> dict[str, Any]:
+    """
+    Gemini OpenAI-compatible `/chat/completions` sometimes returns a JSON **array**
+    (e.g. one envelope per candidate) instead of a single object. Normalize to a dict
+    with `choices` / `error` so callers can use `.get`.
+    """
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list):
+        for x in parsed:
+            if isinstance(x, dict) and (
+                "choices" in x
+                or "error" in x
+                or "usage" in x
+                or x.get("id") is not None
+            ):
+                return x
+        if len(parsed) == 1 and isinstance(parsed[0], dict):
+            return parsed[0]
+    raise RuntimeError(
+        f"Unexpected chat/completions response type: {type(parsed).__name__}"
+    )
+
+
+def _stringify_message_content(c: Any) -> str:
+    """OpenAI uses string content; Gemini compat may use a list of parts."""
+    if c is None:
+        return ""
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        parts: list[str] = []
+        for x in c:
+            if isinstance(x, dict):
+                parts.append(str(x.get("text") or x.get("content") or ""))
+            else:
+                parts.append(str(x))
+        return "".join(parts)
+    return str(c)
+
+
+def _normalize_openai_assistant_message(choice: Any) -> dict[str, Any]:
+    """
+    Google Gemini OpenAI-compatible chat/completions sometimes returns `message` as a list
+    of parts instead of a single object. Without this, `msg.get(...)` raises on list.
+    """
+    if not isinstance(choice, dict):
+        return {}
+    raw = choice.get("message")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        merged: dict[str, Any] = {"role": "assistant"}
+        tool_calls: list[Any] = []
+        for part in raw:
+            if not isinstance(part, dict):
+                continue
+            tc = part.get("tool_calls")
+            if tc:
+                if isinstance(tc, list):
+                    tool_calls.extend(tc)
+                else:
+                    tool_calls.append(tc)
+            c = part.get("content")
+            if c is not None:
+                prev = merged.get("content")
+                merged["content"] = (str(prev) if prev is not None else "") + _stringify_message_content(c)
+            if part.get("role"):
+                merged["role"] = part.get("role")
+            if part.get("function_call"):
+                fn = part.get("function_call")
+                if isinstance(fn, dict):
+                    tool_calls.append(
+                        {
+                            "id": part.get("id") or "call",
+                            "type": "function",
+                            "function": fn,
+                        }
+                    )
+        if tool_calls:
+            merged["tool_calls"] = tool_calls
+        return merged
+    return {}
+
+
 def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
     """OpenAI spec uses a JSON string; some OpenAI-compat providers return a dict."""
     if raw is None:
@@ -143,6 +228,57 @@ def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
         return out if isinstance(out, dict) else {}
+    return {}
+
+
+def _coerce_openai_choice(choice: Any) -> dict[str, Any]:
+    """Some OpenAI-compat APIs nest or list-wrap the choice object."""
+    if isinstance(choice, dict):
+        return choice
+    if isinstance(choice, list):
+        for x in choice:
+            if isinstance(x, dict):
+                return x
+    return {}
+
+
+def _coerce_tool_calls_functions(msg: dict[str, Any]) -> None:
+    """In-place: Gemini may emit tool_calls[].function as a list."""
+    tcs = msg.get("tool_calls")
+    if not isinstance(tcs, list):
+        return
+    for tc in tcs:
+        if isinstance(tc, dict) and tc.get("function") is not None:
+            tc["function"] = _coerce_tool_function_field(tc.get("function"))
+
+
+def _coerce_tool_function_field(raw: Any) -> dict[str, Any]:
+    """
+    OpenAI chat.completions uses tool_calls[].function as {name, arguments}.
+    Gemini compat sometimes returns `function` as a list of fragments — using it as a dict
+    causes 'list' object has no attribute 'get'.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        merged: dict[str, Any] = {}
+        for x in raw:
+            if not isinstance(x, dict):
+                continue
+            if x.get("name"):
+                merged["name"] = x.get("name")
+            if x.get("arguments") is not None:
+                a = x.get("arguments")
+                prev = merged.get("arguments")
+                if isinstance(prev, str) and isinstance(a, str):
+                    merged["arguments"] = prev + a
+                elif prev is None:
+                    merged["arguments"] = a
+        if merged:
+            return merged
+        for x in raw:
+            if isinstance(x, dict):
+                return x
     return {}
 
 
@@ -178,12 +314,12 @@ def monologue_openai_compat(
         f"[llm-step] monologue → POST chat/completions (timeout {_http_timeout():.0f}s)…\n"
     )
     sys.stderr.flush()
-    data = _post_json(url, headers, body)
+    data = _openai_compat_coerce_root(_post_json(url, headers, body))
     ch = data.get("choices") or []
     if not ch:
         raise RuntimeError(f"Unexpected response: {data!r}")
-    msg = ch[0].get("message") or {}
-    return str(msg.get("content") or "").strip()
+    msg = _normalize_openai_assistant_message(_coerce_openai_choice(ch[0]))
+    return _stringify_message_content(msg.get("content")).strip()
 
 
 def monologue_anthropic(
@@ -286,8 +422,8 @@ def decide_openai_compat(
             "tools": pt.OPENAI_STYLE_TOOLS,
             "tool_choice": "auto",
         }
-        data = _post_json(url, headers, body)
-        if isinstance(data, dict) and data.get("error") is not None:
+        data = _openai_compat_coerce_root(_post_json(url, headers, body))
+        if data.get("error") is not None:
             err = data.get("error")
             msg = err.get("message") if isinstance(err, dict) else str(err)
             typ = err.get("type") if isinstance(err, dict) else ""
@@ -298,17 +434,22 @@ def decide_openai_compat(
         ch = (data.get("choices") or [None])[0]
         if not ch:
             raise RuntimeError(f"No choices: {data!r}")
-        msg = ch.get("message") or {}
+        msg = _normalize_openai_assistant_message(_coerce_openai_choice(ch))
+        _coerce_tool_calls_functions(msg)
         tool_calls = msg.get("tool_calls")
         if tool_calls:
             messages.append(msg)
             submit_tc = None
             for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
                 fn = tc.get("function") or {}
                 if (fn.get("name") or "") == "submit_poker_action":
                     submit_tc = tc
                     break
             for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
                 fn = tc.get("function") or {}
                 name = fn.get("name") or ""
                 if name == "submit_poker_action":
@@ -420,7 +561,15 @@ def decide_anthropic(
             if tool_results:
                 messages.append({"role": "user", "content": tool_results})
             if submit_tu is not None:
-                inp = submit_tu.get("input") if isinstance(submit_tu.get("input"), dict) else {}
+                inp = submit_tu.get("input")
+                if isinstance(inp, str) and inp.strip():
+                    try:
+                        parsed = json.loads(inp)
+                        inp = parsed if isinstance(parsed, dict) else {}
+                    except json.JSONDecodeError:
+                        inp = {}
+                elif not isinstance(inp, dict):
+                    inp = {}
                 act = str(inp.get("action") or "fold").lower()
                 amt = inp.get("amount")
                 ai = None if amt is None else int(amt)

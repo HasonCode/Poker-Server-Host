@@ -41,14 +41,17 @@ DEFAULT_PLAYERS: tuple[PlayerConfig, ...] = (
         player_id="claude_4_6_opus",
         display_name="Claude 4.6 Opus",
         provider="anthropic",
-        model="claude-4.6-opus",
+        # Anthropic API id (not claude-4.6-opus). Override: CLAUDE_4_6_OPUS_MODEL
+        model="claude-opus-4-6",
         env_api_key="ANTHROPIC_API_KEY",
     ),
     PlayerConfig(
         player_id="gemini_3_1",
         display_name="Gemini 3.1",
         provider="openai_compat",
-        model="gemini-3.1-pro",
+        # Google AI model id (see https://ai.google.dev/gemini-api/docs/models ). There is no
+        # `gemini-3.1-pro` id — use preview or a GA model e.g. `gemini-2.5-pro`. Override: GEMINI_3_1_MODEL
+        model="gemini-3.1-pro-preview",
         env_api_key="GOOGLE_API_KEY",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai",
     ),

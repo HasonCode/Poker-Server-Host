@@ -1,3 +1,11 @@
 Poker LLM hand results — game 1 — started 2026-04-07T05:16:39Z
 Each section: winners, amounts, and pot accounting.
 
+
+========================================================================
+Hand ended — 2026-04-08T17:08:11Z
+Pot (observed while hand was active, last sample): 680
+Winners:
+  · grok_ai: +780 chips — Full House
+Collective loss by non-winners (chips into this pot): 780 (zero-sum table; amounts awarded = chips others lost to the pot this hand).
+

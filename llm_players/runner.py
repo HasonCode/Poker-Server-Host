@@ -9,6 +9,9 @@ import signal
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -19,6 +22,7 @@ if _CLIENT_PY not in sys.path:
 
 from poker_client import PokerClient, PokerError, TransportError  # noqa: E402
 
+from . import poker_tools as _pt
 from . import prompts
 from .config import DEFAULT_PLAYERS, DEFAULT_TABLE_ID, PlayerConfig
 from .game_files import GameRecorder, resolve_game_id
@@ -42,8 +46,13 @@ def _stdout(msg: str) -> None:
 
 
 def _extra_headers_for_openai_compat(base_url: str, api_key: str) -> dict[str, str]:
+    # Gemini OpenAI-compat /chat/completions requires Authorization: Bearer; x-goog-api-key alone
+    # yields "Missing or invalid Authorization header" from the gateway.
     if "generativelanguage.googleapis.com" in base_url:
-        return {"x-goog-api-key": api_key}
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "x-goog-api-key": api_key,
+        }
     return {}
 
 
@@ -88,6 +97,23 @@ def _monologue(
     )
 
 
+def _try_tts(
+    enabled: bool,
+    engine: str,
+    max_chars: int,
+    player_id: str,
+    mono: str,
+) -> None:
+    if not enabled:
+        return
+    t = (mono or "").strip()
+    if not t:
+        return
+    from .tts import speak_monologue
+
+    speak_monologue(player_id, t, engine=engine, max_chars=max_chars)
+
+
 def _monologue_user_message_after_play(
     pc: PlayerConfig,
     hand_ctx: str,
@@ -102,6 +128,11 @@ def _monologue_user_message_after_play(
         f"{prompts.MONOLOGUE_AFTER_ACTION}\n"
         f"Write your internal Death Note–style monologue now."
     )
+
+
+def _demo_mode_env() -> bool:
+    v = os.environ.get("LLM_DEMO_MODE", "").strip().lower()
+    return v in ("1", "true", "yes")
 
 
 def _decide(pc: PlayerConfig, api_key: str, model: str, state: dict) -> tuple[str, int | None]:
@@ -133,6 +164,9 @@ def _player_loop(
     recorder: GameRecorder,
     shared: dict[str, Any],
     stop: threading.Event,
+    tts: bool = False,
+    tts_engine: str = "espeak",
+    tts_max_chars: int = 6000,
 ) -> None:
     env = os.environ
     key = env.get(pc.env_api_key) or ""
@@ -183,12 +217,15 @@ def _player_loop(
                 pass
             action, amount = "fold", None
 
+        mono = ""
         try:
             um = _monologue_user_message_after_play(pc, ctx, action, amount)
             mono = _monologue(pc, key, model, user_message=um)
             recorder.append_monologue(pc.display_name, pc.player_id, ctx, mono)
         except Exception as e:
             _stderr(f"[{pc.player_id}] monologue error: {e}\n")
+        else:
+            _try_tts(tts, tts_engine, tts_max_chars, pc.player_id, mono)
 
 
 def _hand_watcher(
@@ -321,12 +358,14 @@ def _join_players_parallel(
     base_url: str,
     table_id: str,
     chips: int,
+    *,
+    allow_without_key: bool = False,
 ) -> tuple[list[PokerClient], list[PlayerConfig]]:
     """Join all players with keys concurrently so the server can accept every /join before tick() starts a hand."""
     to_join: list[PlayerConfig] = []
     for pc in players:
         key = os.environ.get(pc.env_api_key) or ""
-        if not key.strip():
+        if not key.strip() and not allow_without_key:
             _stderr(
                 f"Skipping {pc.player_id}: set {pc.env_api_key} in the environment.\n"
             )
@@ -366,7 +405,8 @@ def _join_players_parallel(
 
 
 def _emit_step_json(d: dict[str, Any]) -> None:
-    _stdout(json.dumps(d))
+    """One JSON object per line (trailing newline so shells don’t glue the next prompt to `}`)."""
+    _stdout(json.dumps(d) + "\n")
 
 
 def _fail_step(code: str, message: str) -> None:
@@ -379,10 +419,79 @@ def _step_log(msg: str) -> None:
     _stderr(f"[llm-step] {msg}\n")
 
 
+def _single_step_post_start_hand(base_url: str, table_id: str) -> bool:
+    """
+    POST /v1/tables/:id/start-hand for manual_start_only tables (e.g. llm_bots).
+    Uses POKER_LLM_SPECTATE_PASSWORD or default 1234 to match server defaults.
+    Returns True if server returned 200 OK.
+    """
+    pw = (os.environ.get("POKER_LLM_SPECTATE_PASSWORD") or "1234").strip()
+    path = "/v1/tables/" + urllib.parse.quote(table_id, safe="") + "/start-hand"
+    url = base_url.rstrip("/") + path
+    body = json.dumps({"spectate_password": pw}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            resp.read()
+            code = getattr(resp, "status", None) or resp.getcode()
+            return code == 200
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        if e.code == 409:
+            _step_log("start-hand: hand already in progress (409) — OK")
+            return True
+        if e.code == 401:
+            _step_log(
+                "start-hand: 401 — set POKER_LLM_SPECTATE_PASSWORD to match the server "
+                "(default is often 1234)."
+            )
+        else:
+            _step_log(f"start-hand: HTTP {e.code} {raw[:400]}")
+        return False
+    except Exception as ex:
+        _step_log(f"start-hand: {ex}")
+        return False
+
+
+def _decide_demo(pc: PlayerConfig, state: dict, player_id: str) -> tuple[str, int | None]:
+    """
+    No provider HTTP: run local poker_tools (same code path as real decide() tool execution)
+    and print a short trace to stderr. Safe action: fold.
+    """
+    _step_log("DEMO: simulating tool calls (no OpenAI/Anthropic/Gemini HTTP)")
+    for name in ("get_full_visible_snapshot", "get_betting_context"):
+        _step_log(f"DEMO: tool {name}")
+        out = _pt.execute_tool(name, state, player_id, {})
+        if isinstance(out, dict):
+            keys = list(out.keys())[:10]
+            _step_log(f"DEMO:   -> keys={keys!r}")
+        else:
+            _step_log(f"DEMO:   -> {type(out)!r}")
+    _step_log("DEMO: submit_poker_action fold (no real LLM call)")
+    return "fold", None
+
+
+def _single_step_stdio_setup() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(line_buffering=True)
+            except Exception:
+                pass
+
+
 def run_single_step(args: argparse.Namespace) -> None:
     """One LLM turn: rejoin all keyed players, decide + action + monologue for the current actor; JSON on stdout."""
+    _single_step_stdio_setup()
+    demo = bool(getattr(args, "demo_tools", False)) or _demo_mode_env()
     _step_log(
         f"start table={args.table!r} url={args.url!r} out_dir={os.path.abspath(args.out_dir)!r}"
+        + ("  [DEMO_TOOLS]" if demo else "")
     )
     out_dir = os.path.abspath(args.out_dir)
     game_id = resolve_game_id(out_dir, args.new_game)
@@ -401,9 +510,14 @@ def run_single_step(args: argparse.Namespace) -> None:
     table_id = args.table
     env = os.environ
 
-    clients, joined = _join_players_parallel(players, base_url, table_id, args.chips)
+    clients, joined = _join_players_parallel(
+        players, base_url, table_id, args.chips, allow_without_key=demo
+    )
     if not clients:
-        _fail_step("join_failed", "No players could join (keys / server).")
+        _fail_step(
+            "join_failed",
+            "No players could join (API keys / server). Use --demo-tools to join without keys for a local tool demo.",
+        )
 
     _step_log(f"joined {len(joined)} player(s): {[p.player_id for p in joined]!r}")
     player_by_id = {pc.player_id: pc for pc in joined}
@@ -415,11 +529,26 @@ def run_single_step(args: argparse.Namespace) -> None:
     except (PokerError, TransportError) as e:
         _fail_step("state_error", str(e))
 
+    if state.get("manual_start_only") and (state.get("hand") or {}).get("status") != "active":
+        _step_log(
+            "hand idle on manual-deal table — POST start-hand "
+            "(POKER_LLM_SPECTATE_PASSWORD or default 1234)…"
+        )
+        _single_step_post_start_hand(base_url, table_id)
+        try:
+            state = probe.get_table_state(table_id)
+        except (PokerError, TransportError) as e:
+            _fail_step("state_error", str(e))
+
     h = state.get("hand") or {}
     st = h.get("status")
     _step_log(f"hand.status={st!r} street={h.get('street')!r} action_to_seat={h.get('action_to_seat')!r}")
     if st != "active":
-        _fail_step("no_active_hand", "No active hand — use Deal cards on spectate first.")
+        _fail_step(
+            "no_active_hand",
+            "No active hand after start-hand — need at least two seated players with chips, "
+            "or fix spectate password (POKER_LLM_SPECTATE_PASSWORD).",
+        )
 
     pid = _actor_pid_from_state(state)
     if not pid:
@@ -430,7 +559,9 @@ def run_single_step(args: argparse.Namespace) -> None:
             f"Current actor is {pid!r}, not one of the configured LLM players for this run.",
         )
 
-    _step_log(f"actor={pid!r} (will call decide + action + monologue)")
+    _step_log(
+        f"actor={pid!r} (will call {'demo tools' if demo else 'decide (provider)'} + send_action + optional monologue)"
+    )
     act_client = pid_to_client[pid]
     try:
         state = act_client.get_table_state(table_id)
@@ -444,19 +575,27 @@ def run_single_step(args: argparse.Namespace) -> None:
     hand_ctx = f"{h2.get('street') or '?'} pot={h2.get('pot')}"
     _step_log(f"model={model!r} context={hand_ctx!r}")
 
-    if not key.strip():
+    if not key.strip() and not demo:
         _fail_step(
             "no_api_key",
             f"Missing API key for {pc.player_id}: export {pc.env_api_key} before starting the poker server "
-            "(or source a script that sets it).",
+            "(or source a script that sets it). Or run with --demo-tools to exercise local tools only.",
         )
 
-    _step_log("calling LLM decide() (tools + chat) — may take a while…")
-    try:
-        action, amount = _decide(pc, key, model, state)
-    except Exception as e:
-        _stderr(f"[{pc.player_id}] decide error: {e}\n")
-        action, amount = "fold", None
+    if demo:
+        _step_log("demo: skipping provider HTTP; exercising poker_tools.execute_tool only")
+        try:
+            action, amount = _decide_demo(pc, state, pc.player_id)
+        except Exception as e:
+            _stderr(f"[{pc.player_id}] demo decide error: {e}\n")
+            action, amount = "fold", None
+    else:
+        _step_log("calling LLM decide() (tools + chat) — may take a while…")
+        try:
+            action, amount = _decide(pc, key, model, state)
+        except Exception as e:
+            _stderr(f"[{pc.player_id}] decide error: {e}\n")
+            action, amount = "fold", None
 
     action = (action or "fold").lower()
     _step_log(f"decide -> action={action!r} amount={amount!r}")
@@ -483,12 +622,14 @@ def run_single_step(args: argparse.Namespace) -> None:
 
     _step_log("send_action OK; calling monologue…")
     mono = ""
-    skip_mono = (
+    skip_mono = demo or (
         os.environ.get("LLM_SINGLE_STEP_SKIP_MONOLOGUE", "").strip().lower()
         in ("1", "true", "yes")
     )
     if skip_mono:
-        _step_log("skipping monologue (LLM_SINGLE_STEP_SKIP_MONOLOGUE=1)")
+        _step_log(
+            "skipping monologue (demo or LLM_SINGLE_STEP_SKIP_MONOLOGUE=1)"
+        )
     else:
         try:
             um = _monologue_user_message_after_play(pc, hand_ctx, action, amount)
@@ -497,6 +638,14 @@ def run_single_step(args: argparse.Namespace) -> None:
             _step_log(f"monologue length={len(mono)} chars")
         except Exception as e:
             _stderr(f"[{pc.player_id}] monologue error: {e}\n")
+        else:
+            _try_tts(
+                bool(getattr(args, "tts", False)),
+                str(getattr(args, "tts_engine", "espeak")),
+                int(getattr(args, "tts_max_chars", 6000) or 6000),
+                pc.player_id,
+                mono,
+            )
 
     _step_log("emitting JSON on stdout (single line)")
     _emit_step_json(
@@ -567,6 +716,7 @@ def run_step(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     player_by_id = {pc.player_id: pc for pc in joined}
+    pid_to_client = {pc.player_id: c for pc, c in zip(joined, clients)}
     env = os.environ
 
     watch_client = clients[0]
@@ -610,7 +760,12 @@ def run_step(args: argparse.Namespace) -> None:
         if not _interactive_next_llm_move(pc, stop):
             break
 
-        state = poll_client.get_table_state(table_id)
+        # Must use this actor's PokerClient: X-Player-Token is tied to who joined on that instance.
+        act_client = pid_to_client.get(pc.player_id)
+        if act_client is None:
+            _stderr(f"[{pc.player_id}] internal: no client for actor — skipping.\n")
+            continue
+        state = act_client.get_table_state(table_id)
         key = env.get(pc.env_api_key) or ""
         model = resolve_model_env(pc, env)
         try:
@@ -621,7 +776,7 @@ def run_step(args: argparse.Namespace) -> None:
 
         action = (action or "fold").lower()
         try:
-            poll_client.send_action(
+            act_client.send_action(
                 table_id,
                 player_id=pc.player_id,
                 action=action,
@@ -631,7 +786,7 @@ def run_step(args: argparse.Namespace) -> None:
         except PokerError as e:
             _stderr(f"[{pc.player_id}] action {action} failed: {e}\n")
             try:
-                poll_client.send_action(
+                act_client.send_action(
                     table_id,
                     player_id=pc.player_id,
                     action="fold",
@@ -643,12 +798,21 @@ def run_step(args: argparse.Namespace) -> None:
 
         ctx = shared.get("hand_label") or "unknown street"
 
+        mono = ""
         try:
             um = _monologue_user_message_after_play(pc, ctx, action, amount)
             mono = _monologue(pc, key, model, user_message=um)
             recorder.append_monologue(pc.display_name, pc.player_id, ctx, mono)
         except Exception as e:
             _stderr(f"[{pc.player_id}] monologue error: {e}\n")
+        else:
+            _try_tts(
+                bool(args.tts),
+                str(args.tts_engine),
+                int(args.tts_max_chars or 6000),
+                pc.player_id,
+                mono,
+            )
 
     time.sleep(0.2)
 
@@ -686,7 +850,17 @@ def run_auto(args: argparse.Namespace) -> None:
         threads.append(
             threading.Thread(
                 target=_player_loop,
-                args=(pc, c, table_id, recorder, shared, stop),
+                args=(
+                    pc,
+                    c,
+                    table_id,
+                    recorder,
+                    shared,
+                    stop,
+                    bool(args.tts),
+                    str(args.tts_engine),
+                    int(args.tts_max_chars or 6000),
+                ),
                 name=pc.player_id,
                 daemon=True,
             )
@@ -718,6 +892,17 @@ def run_auto(args: argparse.Namespace) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
+    if getattr(args, "tts", False):
+        from .tts import tts_available
+
+        eng = str(getattr(args, "tts_engine", "espeak"))
+        if not tts_available(eng):
+            _stderr(
+                "[tts] Warning: "
+                + ("`say` not found — use espeak-ng on Linux, or install voices on macOS.\n"
+                   if eng.lower() == "say"
+                   else "espeak-ng/espeak not in PATH — install (e.g. dnf install espeak-ng) or use --tts-engine say on macOS.\n")
+            )
     if args.single_step:
         run_single_step(args)
         return
@@ -739,6 +924,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--single-step",
         action="store_true",
         help="Run one LLM turn (tools + action + monologue) if it is an LLM's turn, then exit. Prints JSON to stdout.",
+    )
+    p.add_argument(
+        "--demo-tools",
+        action="store_true",
+        help="With --single-step: no API keys; exercises local poker_tools + HTTP actions only (fast sanity check).",
     )
     p.add_argument(
         "--auto",
@@ -776,11 +966,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Step mode: do not print periodic table status lines to stderr.",
     )
+    p.add_argument(
+        "--tts",
+        action="store_true",
+        help="After each monologue, speak it with text-to-speech (distinct voice per player_id).",
+    )
+    p.add_argument(
+        "--tts-engine",
+        default="espeak",
+        choices=("espeak", "say"),
+        help="TTS backend: espeak-ng/espeak (Linux default) or macOS `say`.",
+    )
+    p.add_argument(
+        "--tts-max-chars",
+        type=int,
+        default=6000,
+        metavar="N",
+        help="Max characters spoken per monologue (rest truncated). Default: 6000.",
+    )
     return p
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.demo_tools and not args.single_step:
+        _stderr("error: --demo-tools only applies with --single-step\n")
+        sys.exit(2)
     run(args)
 
 

@@ -22,6 +22,7 @@ from .providers import _normalize_base, _post_json, resolve_model_env
 def _openai_compat_headers(base_url: str, api_key: str) -> dict[str, str]:
     h: dict[str, str] = {"Content-Type": "application/json"}
     if "generativelanguage.googleapis.com" in base_url:
+        h["Authorization"] = f"Bearer {api_key}"
         h["x-goog-api-key"] = api_key
     else:
         h["Authorization"] = f"Bearer {api_key}"

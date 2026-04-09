@@ -9,6 +9,32 @@ end
 
 package.path = script_dir() .. "/src/?.lua;" .. script_dir() .. "/src/?/init.lua;" .. package.path
 
+--- Python for llm_players / bot_runner. Set POKER_PYTHON to an absolute path on minimal PATH (systemd, Docker).
+local llm_python_cmd_cache = nil
+local function llm_python_cmd()
+  if llm_python_cmd_cache ~= nil then
+    return llm_python_cmd_cache
+  end
+  local env = os.getenv("POKER_PYTHON")
+  if env and env ~= "" then
+    llm_python_cmd_cache = env
+    return llm_python_cmd_cache
+  end
+  local w = io.popen("command -v python3 2>/dev/null", "r")
+  local p = ""
+  if w then
+    local line = w:read("*l") or ""
+    w:close()
+    p = (line:match("^%s*(.-)%s*$") or "")
+  end
+  if p ~= "" then
+    llm_python_cmd_cache = p
+  else
+    llm_python_cmd_cache = "python3"
+  end
+  return llm_python_cmd_cache
+end
+
 local poker = require("poker")
 local api = poker.api
 local json = poker.json
@@ -180,7 +206,8 @@ local function spawn_bot(root, lang, bot_file, player_id, table_id, port, chips)
     )
   else
     cmd = string.format(
-      "python3 %q %q --name %q --table %q --url %q --chips %d 2>&1 &\necho $!",
+      "%q %q %q --name %q --table %q --url %q --chips %d 2>&1 &\necho $!",
+      llm_python_cmd(),
       root .. "/clients/python/bot_runner.py",
       bot_file, player_id, table_id, url, stack
     )
@@ -354,6 +381,15 @@ local function run_http()
 
   -- libc line-buffering for redirected python output (coreutils stdbuf); helps server see logs immediately.
   local llm_stdbuf_prefix_cache = nil
+  --- Default: skip second LLM call (monologue) so one Run AI turn = one provider round-trip.
+  --- Set POKER_LLM_STEP_WITH_MONOLOGUE=1 on the server to restore monologue after each action.
+  local function llm_step_env_prefix()
+    if os.getenv("POKER_LLM_STEP_WITH_MONOLOGUE") == "1" then
+      return ""
+    end
+    return "LLM_SINGLE_STEP_SKIP_MONOLOGUE=1 "
+  end
+
   local function llm_stdbuf_prefix()
     if llm_stdbuf_prefix_cache ~= nil then
       return llm_stdbuf_prefix_cache
@@ -370,6 +406,14 @@ local function run_http()
       llm_stdbuf_prefix_cache = ""
     end
     return llm_stdbuf_prefix_cache
+  end
+
+  local function sleep_short()
+    if socket_ok and socket and socket.sleep then
+      socket.sleep(0.05)
+    else
+      os.execute("sleep 0.05 2>/dev/null")
+    end
   end
 
   local function pending_client_closed(client)
@@ -948,6 +992,80 @@ local function run_http()
     return { ok = true, table = snap }
   end)
 
+  --- LLM / simulation: adjust blinds and rebuy stack size (spectate password; hand must be idle).
+  srv:route("POST", "/v1/tables/:id/table-settings", function(req, params, s)
+    local c = resolve_table(params, s)
+    if not c then
+      return not_found_table
+    end
+    if not spectate_authorized(req) then
+      return {
+        "401 Unauthorized",
+        api.error_body(
+          "spectate_denied",
+          "Spectate password required (JSON spectate_password, header X-Spectate-Password, or query)."
+        ),
+      }
+    end
+    if not c.manual_start_only then
+      return {
+        "400 Bad Request",
+        api.error_body(
+          "bad_request",
+          "table-settings is only available on manual-deal tables (e.g. llm_bots)."
+        ),
+      }
+    end
+    if c.hand.status ~= "idle" then
+      return {
+        "409 Conflict",
+        api.error_body(
+          "hand_not_idle",
+          "Cannot change blinds or rebuy amount while a hand is active."
+        ),
+      }
+    end
+    if type(req.json) ~= "table" then
+      return { "400 Bad Request", api.error_body("bad_request", "JSON body required.") }
+    end
+    local j = req.json
+    if j.sb_amount ~= nil then
+      local sb = tonumber(j.sb_amount)
+      if sb and sb >= 1 then c.hand.sb_amount = math.floor(sb) end
+    end
+    if j.bb_amount ~= nil then
+      local bb = tonumber(j.bb_amount)
+      if bb and bb >= 1 then c.hand.bb_amount = math.floor(bb) end
+    end
+    if j.rebuy_amount ~= nil then
+      local ra = tonumber(j.rebuy_amount)
+      if ra and ra >= 1 then c.rebuy_amount = math.floor(ra) end
+    end
+    if j.zero_chips ~= nil then
+      if j.zero_chips == "eject" or j.zero_chips == "rebuy" then
+        c.zero_chips = j.zero_chips
+      end
+    end
+    io.stderr:write(
+      "[table-settings] "
+        .. params.table_id
+        .. " SB="
+        .. tostring(c.hand.sb_amount)
+        .. " BB="
+        .. tostring(c.hand.bb_amount)
+        .. " rebuy="
+        .. tostring(c.rebuy_amount)
+        .. "\n"
+    )
+    return {
+      ok = true,
+      sb_amount = c.hand.sb_amount,
+      bb_amount = c.hand.bb_amount,
+      rebuy_amount = c.rebuy_amount,
+      zero_chips = c.zero_chips,
+    }
+  end)
+
   srv:route("POST", "/v1/tables/:id/llm-step", function(req, params, s)
     local c = resolve_table(params, s)
     if not c then
@@ -988,10 +1106,14 @@ local function run_http()
     -- Subshell + background: POSIX sh parses `cd && ... & echo $!` wrong without parens.
     -- PID is written to pid_path; shell stdout may be empty.
     local pid_path = out_path .. ".pid"
+    -- PYTHONPATH ensures -m llm_players resolves if cwd/env differ; POKER_PYTHON for systemd/Docker PATH.
     local inner = string.format(
-      "(cd %q && PYTHONUNBUFFERED=1 %spython3 -u -m llm_players --single-step --table %q --url %q --out-dir %q > %q 2>&1) & echo $! > %q",
+      "(cd %q && PYTHONPATH=%q %sPYTHONUNBUFFERED=1 %s%q -u -m llm_players --single-step --table %q --url %q --out-dir %q > %q 2>&1) & echo $! > %q",
       root,
+      root,
+      llm_step_env_prefix(),
       llm_stdbuf_prefix(),
+      llm_python_cmd(),
       tid,
       base,
       root,
@@ -1002,6 +1124,8 @@ local function run_http()
     io.stderr:write(
       "[poker-server] llm-step: start table="
         .. tid
+        .. " python="
+        .. llm_python_cmd()
         .. " (deferred response — subprocess can call this server on "
         .. base
         .. ")\n"
@@ -1023,13 +1147,31 @@ local function run_http()
     h:read("*a")
     h:close()
     local pid_line = nil
-    local pf = io.open(pid_path, "r")
-    if pf then
-      pid_line = pf:read("*l")
-      pf:close()
+    local pid = nil
+    for _ = 1, 60 do
+      local pf = io.open(pid_path, "r")
+      if pf then
+        pid_line = pf:read("*l")
+        pf:close()
+        pid = tonumber((pid_line or ""):match("^%s*(%d+)"))
+        if pid then
+          break
+        end
+      end
+      sleep_short()
     end
-    local pid = tonumber((pid_line or ""):match("^%s*(%d+)"))
     if not pid then
+      local tail = ""
+      local of = io.open(out_path, "rb")
+      if of then
+        local all = of:read("*a") or ""
+        of:close()
+        if #all > 2000 then
+          tail = all:sub(-2000)
+        else
+          tail = all
+        end
+      end
       pcall(function()
         os.remove(out_path)
       end)
@@ -1040,15 +1182,25 @@ local function run_http()
         "500 Internal Server Error",
         api.error_body(
           "internal",
-          "Could not read subprocess pid for llm_players (single-step). Check that python3 and llm_players are available.",
-          { pid_line = pid_line, pid_path = pid_path }
+          "Could not read subprocess pid for llm_players (single-step). "
+            .. "Set POKER_PYTHON to the full path of python3 if the service has a minimal PATH. "
+            .. "Ensure this repo root is readable and contains llm_players/. See details.stdout_tail.",
+          {
+            pid_line = pid_line,
+            pid_path = pid_path,
+            python_cmd = llm_python_cmd(),
+            repo_root = root,
+            stdout_tail = tail,
+          }
         ),
       }
     end
     c.llm_step_log = { lines = {}, active = true, t0 = os.clock() }
     llm_step_log_append(
       c,
-      "[llm-step] Subprocess started — lines from llm_players (tools, HTTP heartbeats, monologue) stream below."
+      "[llm-step] Subprocess started — lines from llm_players stream below. "
+        .. (os.getenv("POKER_LLM_STEP_WITH_MONOLOGUE") == "1" and "Includes monologue (second LLM call)."
+          or "Monologue skipped by default (set POKER_LLM_STEP_WITH_MONOLOGUE=1 for second LLM call per turn).")
     )
     return {
       __defer_llm_step = true,

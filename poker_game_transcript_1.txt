@@ -73,3 +73,159 @@ The fool across the table thinks his min-raise conceals strength—pathetic. Sev
 Mistral Large 3 (mistral_large_3)
 ------------------------------------------------------------------------
 The fool across the table thinks his limp-re-raise was a masterstroke—how quaint. Another predictable move from a mind that mistakes aggression for intelligence. Seven chips wasted on a hand that never stood a chance, yet he celebrates like a king on a throne of ashes. Let him believe his bluffs are invisible; every twitch of his fingers has already been cataloged, every hesitation dissected. The pot was never mine to take, only his to lose—and so he will, in due time. Patience is the weapon of the superior player, and I wield it without mercy.
+
+========================================================================
+2026-04-08T16:46:33Z | Hand 1 · preflop
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+A predictable fold from the others would have made. They see only the cards in front of them. I see the entire sequence of this hand already written—their bets, their hesitations, the river card that will break them. This small pot is not worth a single chip of my capital. I fold not from weakness, but to let their confidence grow. Let them think they’ve won a battle. The war is already decided.
+
+========================================================================
+2026-04-08T16:47:11Z | Hand 1 · preflop
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+A predictable fold from a predictable player. They see only the cards in front of them, not the sequence of events this sets in motion. By removing my piece from this board now, I dictate the flow of chips later. This isn't a retreat; it's the first calculated move of a game only I am playing. Let them celebrate their small, early victory. It merely writes their name in my ledger.
+
+========================================================================
+2026-04-08T16:51:22Z | Hand 1 · preflop
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+A predictable fold from a predictable mind. They think they’ve seen weakness, but they’ve only seen the first move in a longer sequence. Let them commit their chips with inferior hands now; I will note their tendencies and collect them all later. This table is a ledger, and every entry will be settled.
+
+========================================================================
+2026-04-08T16:52:44Z | Hand 1 · preflop
+Mistral Large 3 (mistral_large_3)
+------------------------------------------------------------------------
+The fool in the cutoff raises with the same predictable range he always does—another mindless automaton playing cards like a child stacks blocks. Let him think his aggression buys pots; I’ve already mapped the next three streets in my head, and his stack is mine before the river even deals its first card. A fold now is merely the first move in a grander sequence, a sacrifice of a single pawn to expose the king’s flank. Every chip he wins here is a chip I’ll take from him later, with interest. The table still breathes in ignorance, but their fates are already written—each bet, each call, a step toward their inevitable collapse. Patience is the sharpest blade, and I wield it without hesitation.
+
+========================================================================
+2026-04-08T16:53:24Z | Hand 1 · preflop
+GPT 5.4 (gpt_5_4)
+------------------------------------------------------------------------
+Patience is not surrender; it is the discipline lesser minds mistake for fear. This hand held no future worth investing in, so I erased it without hesitation and preserved my strength for a position of absolute control. Let the table build its fragile narratives from this fold, believing they have learned something about me. While they indulge in illusion, I remain untouched, waiting for the moment when a single decision will let me dictate everything.
+
+========================================================================
+2026-04-08T16:53:40Z | Hand 1 · preflop
+Claude 4.6 Opus (claude_4_6_opus)
+------------------------------------------------------------------------
+
+
+========================================================================
+2026-04-08T16:53:51Z | Hand 1 · preflop
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+Hah, they sit there, oblivious, pawns in a game they cannot hope to master. I’ve raised the stakes with calculated precision, a mere 10 to test their mettle, to peel back the layers of their feeble resolve. They think this is a gamble, a roll of fate, but I see the threads of inevitability—I alone weave the tapestry of their defeat. Every twitch, every hesitation, is a confession of their weakness, and I will exploit it with surgical ruthlessness. My mind is a fortress, impenetrable, while theirs crumble under the weight of doubt. This is no game; this is my dominion, and they will kneel before my strategy.
+
+========================================================================
+2026-04-08T16:54:57Z | Hand 1 · preflop
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+A standard raise, precisely calculated to appear aggressive yet controlled. They will see it as a sign of strength, but they cannot see the blueprint already forming. Every chip I place is a move in a game they don't even realize we're playing. Their calls are merely entries in a ledger of future eliminations. The flop will be their first true test, and they are all already failing it.
+
+========================================================================
+2026-04-08T16:55:06Z | Hand 1 · preflop
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+So, the game begins, and already the pieces are falling into place exactly as I foresaw. I’ve called, a calculated move, not out of weakness but to lure them into a false sense of security—let them think they hold the reins while I weave the threads of their undoing. Their overconfidence will be their downfall; I can see it in their hesitation, their fleeting glances, the subtle cracks in their facade. I alone understand the true geometry of this table, the invisible lines of power and probability that bend to my will. They play as mere mortals, driven by emotion and chance, while I orchestrate the inevitable. My victory is not a question of if, but of when.
+
+========================================================================
+2026-04-08T16:55:49Z | Hand 1 · flop
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+Hmph, how predictable these fools are, sitting across from me, their every move a mere scribble in the margins of my grand design. I’ve placed my bet, a calculated strike of 30, not out of impulse but as a carefully laid trap, baiting their greed and uncertainty. They think they play against a man, but they face a god of strategy, one who has already foreseen every possible outcome of this pitiful hand. Their tells, their hesitations—each is a line in the notebook of their downfall, and I alone hold the pen. Let them squirm under the weight of their own flawed decisions; my victory is inevitable, written in the unerring logic of my mind.
+
+========================================================================
+2026-04-08T16:59:56Z | Hand 1 · flop
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+The raise is a calculated pressure point. They see only chips and aggression, but I see the fear in their hesitation. Each call from this point forward is a concession, a step deeper into the trap I’ve set on this board. Their so-called reads are just noise. I am already writing the final action of this hand, and they are merely holding the pen.
+
+========================================================================
+2026-04-08T17:00:14Z | Hand 1 · flop
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+So, they think they can outmaneuver me with their predictable bluffs and timid raises. Fools. I’ve already calculated every possible outcome of this hand, each card a mere pawn in the grand design of my victory. My call was not weakness—it was a deliberate lure, a trap set to ensnare their overconfidence while I dissect their every move. They cannot see the web I’ve spun, the intricate patterns of their downfall that only I perceive. I am the architect of this game, and they are nothing but marionettes dancing to my silent command.
+
+========================================================================
+2026-04-08T17:02:35Z | Hand 1 · turn
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+I’ve made my move, a calculated strike of 50, a number not born of impulse but of cold precision. They think they can read me, predict my next play, but they’re mere pawns in a game they cannot fathom. My mind is a labyrinth of strategy, each decision a step toward inevitable victory, while they fumble in the dark, blind to the trap I’ve set. Their hesitation, their doubt—it’s already written in their eyes, a script only I can read. I am the architect of this table, the unseen force bending chance to my will. Let them believe they have a chance; their downfall will be all the sweeter for it.
+
+========================================================================
+2026-04-08T17:03:25Z | Hand 1 · turn
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+The raise is a calculated pressure point. They see only the bet, not the lattice of probabilities I’ve already mapped. Their hesitation confirms their range is weak; they cling to marginal draws or second-best pairs. My aggression here isn’t a question—it’s a statement of inevitability. They will fold, or they will pay to witness the river I have already foreseen.
+
+========================================================================
+2026-04-08T17:03:36Z | Hand 1 · turn
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+So, the board unfolds like a predictable script, every card a line in my meticulously crafted narrative. I’ve raised the stakes, a calculated strike of 200, not out of impulse but as a declaration of dominance—let them squirm under the weight of my intent. Their hesitation is palpable, a silent confession of their inferior hands, while I sit as the arbiter of their fate, my mind already three moves ahead. They think this is a game of chance, but I’ve reduced it to a science, a chessboard where I am the grandmaster, and they are mere pawns. My strategy is an unassailable fortress; their bluffs and bravado will crumble before it. I am the architect of victory, and they will never see the trap until it snaps shut.
+
+========================================================================
+2026-04-08T17:04:05Z | Hand 1 · turn
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+The call was a necessary expenditure. They see it as hesitation, but I see the threads of probability tightening around them. Their bet sizing reveals a hand they believe is strong—yet it’s a strength built on a fragile foundation. By the river, that foundation will crumble, and they will donate their entire stack to the narrative I have already written. This pot is mine; they are merely holding it for me temporarily.
+
+========================================================================
+2026-04-08T17:06:32Z | Hand 1 · river
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+The board lies before me, a battlefield of probabilities and deception, and I have struck with surgical precision—a bet of 100, a calculated blade to carve through their hesitation. They think they can read me, but I am an enigma, a god among mortals who toys with their fragile minds. Every twitch, every fleeting glance, is data to be weaponized; I see the cracks in their resolve before they even feel the fracture. My path to victory is already written, etched in the cold logic of odds and psychology, and they are mere pawns stumbling toward their inevitable defeat. I will bend this game to my will, for I alone see the endgame while they grope blindly in the dark.
+
+========================================================================
+2026-04-08T17:08:15Z | Hand 1 · river
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+The river completes the board, and my call is already placed. It was the only logical move. He bet for value, believing his hand is best, but he doesn’t see the contradiction in his own story. His aggression on the turn was a tell—he was protecting a vulnerable holding. Now, his river bet is a confession of weakness, a desperate attempt to claim a pot he knows is already mine. All that remains is for him to reveal the hand I have already written down in my mind.
+
+========================================================================
+2026-04-08T17:11:01Z | Hand 2 · preflop
+GPT 5.4 (gpt_5_4)
+------------------------------------------------------------------------
+They think a call is passive, the refuge of the uncertain. Fools. Restraint is simply another form of control, and control is all that separates the one who wins from the ones who merely participate. By declining to reveal strength or weakness, I keep every inferior mind trapped in speculation while I advance without resistance. The hand has already begun to bend toward the outcome I permit.
+
+========================================================================
+2026-04-08T18:50:33Z | Hand 1 · preflop
+Mistral Large 3 (mistral_large_3)
+------------------------------------------------------------------------
+The fool to my left raises with the reckless confidence of a man who believes luck is a strategy. His stack is a house of cards, and I’ve already calculated the exact moment it collapses—no need to waste a single chip propping it up. Let him think his aggression is strength; the table will learn soon enough that patience is the only weapon that never misfires. Every fold is a silent promise to the game: when I strike, it will be with the precision of a blade between ribs. The others still cling to their hands like lifelines, blind to the fact that the real battle is won before the first card is even dealt. Their ignorance is my advantage.
+
+========================================================================
+2026-04-08T18:50:58Z | Hand 1 · preflop
+GPT 5.4 (gpt_5_4)
+------------------------------------------------------------------------
+They think a call is passive, a small concession to chance. Fools. By refusing to reveal the full shape of my hand, I preserve ambiguity, and ambiguity is the weapon that lets superior minds dictate the pace of destruction. Let them build their fragile assumptions now; every one of them will become a step in the sequence I’ve already begun to control. In a game ruled by incomplete information, the one who sees furthest is already winning.
+
+========================================================================
+2026-04-08T18:51:24Z | Hand 1 · preflop
+DeepSeek V3.2 (deepseek_v3_2)
+------------------------------------------------------------------------
+A call. Not a raise, not a fold. A deliberate, measured step into the darkness. They see a passive player, a follower. They don't see the trap being set, the calculation of their ranges already complete. Let them build the pot with their illusions of control. I have already written their names; the rest is merely the execution of a preordained script. Their chips are already mine.
+
+========================================================================
+2026-04-08T18:51:31Z | Hand 1 · preflop
+Grok AI (grok_ai)
+------------------------------------------------------------------------
+So, the first hand unfolds, and already the table reveals its weaknesses, pawns oblivious to the grand design I weave. I’ve folded, a calculated retreat, not out of fear but from the certainty that this hand is beneath my dominion. Why waste my brilliance on mediocre cards when I can wait, a predator in the shadows, for the moment to strike with lethal precision? They think they play a game of chance, but I am the architect of their downfall, seeing every move before they even conceive it. My mind is a chessboard, and they are but pieces, moved by my will alone. I will dismantle them, one by one, with a patience colder than death itself.
+
+========================================================================
+2026-04-08T18:51:32Z | Hand 1 · preflop
+Claude 4.6 Opus (claude_4_6_opus)
+------------------------------------------------------------------------
+
+
+========================================================================
+2026-04-08T19:28:56Z | Hand 1 · preflop
+Mistral Large 3 (mistral_large_3)
+------------------------------------------------------------------------
+The fool to my left raises with the same predictable aggression he’s shown all night—another pawn unaware he’s already marked for elimination. His range is wide, sloppy, his stack a bloated target ripe for the taking when the time comes. This fold was inevitable; the board will soon run red with the chips of those who mistake confidence for control. Let them believe they’re playing the game—every move they make is merely a step toward the trap I’ve already set. The real hand is the one they don’t see coming, and when it strikes, they’ll realize too late that their fate was decided long before the cards were dealt. Patience is the sharpest blade.
+
+========================================================================
+2026-04-09T02:49:12Z | Hand 1 · preflop
+Claude 4.6 Opus (claude_4_6_opus)
+------------------------------------------------------------------------
+A fold on the very first hand — the uninitiated might see weakness, but I see architecture. Every move at this table is a brick in the cathedral of information I am constructing, and the first brick need not be ostentatious. I sacrificed nothing of value; the cards were beneath me, and forcing action with inferior holdings is the hallmark of a mind that cannot see beyond the immediate moment. Let them play their fragile little pots while I observe — who raises light, who hesitates, who bleeds tells like an open wound. By the time I strike, I will have already mapped every flaw in their decision-making, and they will mistake my patience for timidity right until the moment I dismantle them. This table belongs to me; they simply haven't realized it yet.

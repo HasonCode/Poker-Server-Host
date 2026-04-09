@@ -132,6 +132,7 @@
     const max = data.max_seats || 10;
     const seats = data.seats || [];
     const hand = data.hand || {};
+    const bustCounts = data.bust_counts || {};
     const holeCards = hand.hole_cards || {};
     const folded = hand.folded || {};
 
@@ -161,10 +162,20 @@
       el.replaceChildren();
 
       if (s && s.player_id) {
+        const pid = s.player_id;
         const name = document.createElement("div");
         name.className = "fs-name";
-        name.textContent = s.player_id;
+        name.textContent = pid;
         el.appendChild(name);
+
+        const bustN = bustCounts[pid] != null ? bustCounts[pid] : 0;
+        const buyInNum = bustN + 1;
+        const buyInEl = document.createElement("div");
+        buyInEl.className = "fs-buyin";
+        buyInEl.title =
+          "Current buy-in period (increments after each rebuy when stack hit 0 at end of hand)";
+        buyInEl.textContent = "Buy-in #" + buyInNum;
+        el.appendChild(buyInEl);
 
         const stack = document.createElement("div");
         stack.className = "fs-stack";

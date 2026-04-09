@@ -100,37 +100,98 @@
   font-size: 0.9rem;
 }
 
+/* Per-LLM palette: --mono-text + borders (felt seats share these classes; no bare `color` on the class alone). */
 .llm-mono-gpt_5_4 {
   --mono-border: #22d3ee;
-  color: #a5f3fc;
+  --mono-text: #a5f3fc;
+  --mono-border-soft: rgba(34, 211, 238, 0.45);
 }
 .llm-mono-claude_4_6_opus {
   --mono-border: #fb923c;
-  color: #fed7aa;
+  --mono-text: #fed7aa;
+  --mono-border-soft: rgba(251, 146, 60, 0.45);
 }
 .llm-mono-gemini_3_1 {
   --mono-border: #60a5fa;
-  color: #bfdbfe;
+  --mono-text: #bfdbfe;
+  --mono-border-soft: rgba(96, 165, 250, 0.45);
 }
 .llm-mono-llama_4 {
   --mono-border: #a78bfa;
-  color: #ddd6fe;
+  --mono-text: #ddd6fe;
+  --mono-border-soft: rgba(167, 139, 250, 0.45);
 }
 .llm-mono-deepseek_v3_2 {
   --mono-border: #4ade80;
-  color: #bbf7d0;
+  --mono-text: #bbf7d0;
+  --mono-border-soft: rgba(74, 222, 128, 0.45);
 }
 .llm-mono-mistral_large_3 {
   --mono-border: #f472b6;
-  color: #fbcfe8;
+  --mono-text: #fbcfe8;
+  --mono-border-soft: rgba(244, 114, 182, 0.45);
 }
 .llm-mono-grok_ai {
   --mono-border: #facc15;
-  color: #fef9c3;
+  --mono-text: #fef9c3;
+  --mono-border-soft: rgba(250, 204, 21, 0.45);
 }
 .llm-mono-default {
   --mono-border: #94a3b8;
-  color: #e2e8f0;
+  --mono-text: #e2e8f0;
+  --mono-border-soft: rgba(148, 163, 184, 0.4);
+}
+
+/* Monologue: explicit text color so nested blocks beat global / panel inheritance. */
+.monologue-entry.llm-mono-gpt_5_4 .monologue-head,
+.monologue-entry.llm-mono-gpt_5_4 .monologue-body,
+.monologue-entry.llm-mono-claude_4_6_opus .monologue-head,
+.monologue-entry.llm-mono-claude_4_6_opus .monologue-body,
+.monologue-entry.llm-mono-gemini_3_1 .monologue-head,
+.monologue-entry.llm-mono-gemini_3_1 .monologue-body,
+.monologue-entry.llm-mono-llama_4 .monologue-head,
+.monologue-entry.llm-mono-llama_4 .monologue-body,
+.monologue-entry.llm-mono-deepseek_v3_2 .monologue-head,
+.monologue-entry.llm-mono-deepseek_v3_2 .monologue-body,
+.monologue-entry.llm-mono-mistral_large_3 .monologue-head,
+.monologue-entry.llm-mono-mistral_large_3 .monologue-body,
+.monologue-entry.llm-mono-grok_ai .monologue-head,
+.monologue-entry.llm-mono-grok_ai .monologue-body,
+.monologue-entry.llm-mono-default .monologue-head,
+.monologue-entry.llm-mono-default .monologue-body {
+  color: var(--mono-text);
+}
+
+/* Felt seat: same palette on display name (stack / tags keep their own colors). */
+.felt-seat.llm-mono-gpt_5_4 .fs-name,
+.felt-seat.llm-mono-claude_4_6_opus .fs-name,
+.felt-seat.llm-mono-gemini_3_1 .fs-name,
+.felt-seat.llm-mono-llama_4 .fs-name,
+.felt-seat.llm-mono-deepseek_v3_2 .fs-name,
+.felt-seat.llm-mono-mistral_large_3 .fs-name,
+.felt-seat.llm-mono-grok_ai .fs-name {
+  color: var(--mono-text);
+}
+
+.felt-seat.llm-mono-gpt_5_4.occupied,
+.felt-seat.llm-mono-claude_4_6_opus.occupied,
+.felt-seat.llm-mono-gemini_3_1.occupied,
+.felt-seat.llm-mono-llama_4.occupied,
+.felt-seat.llm-mono-deepseek_v3_2.occupied,
+.felt-seat.llm-mono-mistral_large_3.occupied,
+.felt-seat.llm-mono-grok_ai.occupied {
+  border-color: var(--mono-border-soft);
+}
+
+/* Action log: beat .log li b { color: var(--text) } in styles.css */
+.spectate-app .log li b.llm-mono-gpt_5_4,
+.spectate-app .log li b.llm-mono-claude_4_6_opus,
+.spectate-app .log li b.llm-mono-gemini_3_1,
+.spectate-app .log li b.llm-mono-llama_4,
+.spectate-app .log li b.llm-mono-deepseek_v3_2,
+.spectate-app .log li b.llm-mono-mistral_large_3,
+.spectate-app .log li b.llm-mono-grok_ai {
+  color: var(--mono-text);
 }
 
 .llm-empty-hint {

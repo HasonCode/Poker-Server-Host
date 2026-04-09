@@ -314,6 +314,7 @@
     const max = data.max_seats || 10;
     const seats = data.seats || [];
     const hand = data.hand || {};
+    const bustCounts = data.bust_counts || {};
     const holeCards = hand.hole_cards || {};
     const folded = hand.folded || {};
 
@@ -333,12 +334,18 @@
       const isFolded = typeof folded === "object" && !Array.isArray(folded) && folded[String(i)];
 
       const base = "felt-seat";
+      const pidForColor = s && s.player_id ? s.player_id : "";
+      const paletteCls =
+        pidForColor && LLM_MONO_CLASS[pidForColor]
+          ? " " + LLM_MONO_CLASS[pidForColor]
+          : "";
       el.className =
         base +
         (s && s.player_id ? " occupied" : "") +
         (hand.action_to_seat === i ? " acting" : "") +
         " spectate-ghost" +
-        (isFolded ? " folded" : "");
+        (isFolded ? " folded" : "") +
+        paletteCls;
       el.dataset.seat = i;
       el.replaceChildren();
 
@@ -359,6 +366,15 @@
           badge.textContent = "LLM";
           el.appendChild(badge);
         }
+
+        const bustN = bustCounts[pid] != null ? bustCounts[pid] : 0;
+        const buyInNum = bustN + 1;
+        const buyInEl = document.createElement("div");
+        buyInEl.className = "fs-buyin";
+        buyInEl.title =
+          "Current buy-in period (increments after each rebuy when stack hit 0 at end of hand)";
+        buyInEl.textContent = "Buy-in #" + buyInNum;
+        el.appendChild(buyInEl);
 
         const stack = document.createElement("div");
         stack.className = "fs-stack";
@@ -420,9 +436,12 @@
     log.forEach((entry) => {
       const li = document.createElement("li");
       const amt = entry.amount != null ? " " + entry.amount : "";
+      const pid = entry.player_id != null ? String(entry.player_id) : "";
+      const monoCls = pid && LLM_MONO_CLASS[pid] ? LLM_MONO_CLASS[pid] : "";
+      const bTag = monoCls ? "<b class=\"" + monoCls + "\">" : "<b>";
       li.innerHTML =
-        "<b>" +
-        esc(entry.player_id) +
+        bTag +
+        esc(pid) +
         "</b> " +
         esc(entry.action) +
         amt +

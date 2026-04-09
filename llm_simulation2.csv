@@ -1,0 +1,152 @@
+record_type,hand_number,step_index,player_id,action,amount,street,button_seat,sb_seat,bb_seat,sb_amount,bb_amount,data_json
+meta,,,,,,,,,,,,"{""rotation_help"": ""Button moves clockwise each hand; SB is next clockwise from BTN, BB next after SB (heads-up rules differ). Seats fill in join order."", ""seat_order_join"": [""gpt_5_4"", ""claude_4_6_opus"", ""gemini_3_1"", ""deepseek_v3_2"", ""mistral_large_3"", ""grok_ai""], ""sb_amount"": 2, ""bb_amount"": 5, ""buy_in_chips"": 1000, ""table_id"": ""llm_bots""}"
+hand_start,1,,,,,,2,3,4,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1000}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1000}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 1000}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 1000}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 1000}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1000}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1000}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1000}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 995}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 1000}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1000}}, ""pot"": 7}"
+action,1,1,mistral_large_3,raise,12,preflop,2,3,4,2,5,
+action,1,2,grok_ai,raise,30,preflop,2,3,4,2,5,
+action,1,3,gpt_5_4,fold,,preflop,2,3,4,2,5,
+action,1,4,claude_4_6_opus,fold,,preflop,2,3,4,2,5,
+action,1,5,gemini_3_1,fold,,preflop,2,3,4,2,5,
+action,1,6,deepseek_v3_2,fold,,preflop,2,3,4,2,5,
+action,1,7,mistral_large_3,call,,flop,2,3,4,2,5,
+action,1,8,mistral_large_3,bet,40,flop,2,3,4,2,5,
+action,1,9,grok_ai,raise,80,flop,2,3,4,2,5,
+action,1,10,mistral_large_3,call,,turn,2,3,4,2,5,
+action,1,11,mistral_large_3,bet,120,turn,2,3,4,2,5,
+action,1,12,grok_ai,raise,240,turn,2,3,4,2,5,
+action,1,13,mistral_large_3,fold,,none,,,,2,5,
+hand_end,1,,,,,,,,,,,"{""winners"": [{""seat"": 6, ""player_id"": ""grok_ai"", ""amount"": 587, ""hand_name"": ""fold""}], ""last_pot"": 0}"
+hand_start,2,,,,,,3,4,5,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1000}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1000}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 995}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 770}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1237}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1000}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1000}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 993}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 765}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1237}}, ""pot"": 7}"
+action,2,1,grok_ai,call,,preflop,3,4,5,2,5,
+action,2,2,gpt_5_4,call,,preflop,3,4,5,2,5,
+action,2,3,claude_4_6_opus,fold,,preflop,3,4,5,2,5,
+action,2,4,gemini_3_1,fold,,preflop,3,4,5,2,5,
+action,2,5,deepseek_v3_2,call,,flop,3,4,5,2,5,
+action,2,6,deepseek_v3_2,check,,turn,3,4,5,2,5,
+action,2,7,deepseek_v3_2,check,,river,3,4,5,2,5,
+action,2,8,deepseek_v3_2,check,,none,,,,2,5,
+hand_end,2,,,,,,,,,,,"{""winners"": [{""seat"": 5, ""player_id"": ""mistral_large_3"", ""amount"": 20, ""hand_name"": ""Straight""}], ""last_pot"": 0}"
+hand_start,3,,,,,,4,5,6,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 995}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1000}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 785}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1232}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 995}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1000}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1227}}, ""pot"": 7}"
+action,3,1,gpt_5_4,fold,,preflop,4,5,6,2,5,
+action,3,2,claude_4_6_opus,raise,15,preflop,4,5,6,2,5,
+action,3,3,gemini_3_1,fold,,preflop,4,5,6,2,5,
+action,3,4,deepseek_v3_2,fold,,preflop,4,5,6,2,5,
+action,3,5,mistral_large_3,fold,,preflop,4,5,6,2,5,
+action,3,6,grok_ai,call,,flop,4,5,6,2,5,
+action,3,7,grok_ai,check,,turn,4,5,6,2,5,
+action,3,8,grok_ai,check,,river,4,5,6,2,5,
+action,3,9,grok_ai,check,,none,,,,2,5,
+hand_end,3,,,,,,,,,,,"{""winners"": [{""seat"": 2, ""player_id"": ""claude_4_6_opus"", ""amount"": 32, ""hand_name"": ""Two Pair""}], ""last_pot"": 0}"
+hand_start,4,,,,,,5,6,1,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 995}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1017}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1217}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 990}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1017}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1215}}, ""pot"": 7}"
+action,4,1,claude_4_6_opus,raise,12,preflop,5,6,1,2,5,
+action,4,2,gemini_3_1,fold,,preflop,5,6,1,2,5,
+action,4,3,deepseek_v3_2,fold,,preflop,5,6,1,2,5,
+action,4,4,mistral_large_3,fold,,preflop,5,6,1,2,5,
+action,4,5,grok_ai,fold,,preflop,5,6,1,2,5,
+action,4,6,gpt_5_4,fold,,none,,,,2,5,
+hand_end,4,,,,,,,,,,,"{""winners"": [{""seat"": 2, ""player_id"": ""claude_4_6_opus"", ""amount"": 19, ""hand_name"": ""fold""}], ""last_pot"": 0}"
+hand_start,5,,,,,,6,1,2,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 990}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1215}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 988}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1019}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1215}}, ""pot"": 7}"
+action,5,1,gemini_3_1,fold,,preflop,6,1,2,2,5,
+action,5,2,deepseek_v3_2,fold,,preflop,6,1,2,2,5,
+action,5,3,mistral_large_3,fold,,preflop,6,1,2,2,5,
+action,5,4,grok_ai,raise,15,preflop,6,1,2,2,5,
+action,5,5,gpt_5_4,fold,,preflop,6,1,2,2,5,
+action,5,6,claude_4_6_opus,fold,,none,,,,2,5,
+hand_end,5,,,,,,,,,,,"{""winners"": [{""seat"": 6, ""player_id"": ""grok_ai"", ""amount"": 22, ""hand_name"": ""fold""}], ""last_pot"": 0}"
+hand_start,6,,,,,,1,2,3,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 988}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1019}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 998}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1222}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 988}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1017}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 993}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1222}}, ""pot"": 7}"
+action,6,1,deepseek_v3_2,fold,,preflop,1,2,3,2,5,
+action,6,2,mistral_large_3,fold,,preflop,1,2,3,2,5,
+action,6,3,grok_ai,raise,15,preflop,1,2,3,2,5,
+action,6,4,gpt_5_4,call,,preflop,1,2,3,2,5,
+action,6,5,claude_4_6_opus,call,,preflop,1,2,3,2,5,
+action,6,6,gemini_3_1,fold,,flop,1,2,3,2,5,
+action,6,7,claude_4_6_opus,check,,turn,1,2,3,2,5,
+action,6,8,claude_4_6_opus,check,,river,1,2,3,2,5,
+action,6,9,claude_4_6_opus,check,,none,,,,2,5,
+hand_end,6,,,,,,,,,,,"{""winners"": [{""seat"": 2, ""player_id"": ""claude_4_6_opus"", ""amount"": 25, ""hand_name"": ""Two Pair""}, {""seat"": 6, ""player_id"": ""grok_ai"", ""amount"": 25, ""hand_name"": ""Two Pair""}], ""last_pot"": 0}"
+hand_start,7,,,,,,2,3,4,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 973}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1029}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 993}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 990}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1232}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 973}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1029}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 985}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1232}}, ""pot"": 7}"
+action,7,1,mistral_large_3,fold,,preflop,2,3,4,2,5,
+action,7,2,grok_ai,call,,preflop,2,3,4,2,5,
+action,7,3,gpt_5_4,raise,20,preflop,2,3,4,2,5,
+action,7,4,claude_4_6_opus,fold,,preflop,2,3,4,2,5,
+action,7,5,gemini_3_1,fold,,preflop,2,3,4,2,5,
+action,7,6,deepseek_v3_2,fold,,preflop,2,3,4,2,5,
+action,7,7,grok_ai,call,,flop,2,3,4,2,5,
+action,7,8,grok_ai,check,,turn,2,3,4,2,5,
+action,7,9,grok_ai,check,,river,2,3,4,2,5,
+action,7,10,grok_ai,check,,none,,,,2,5,
+hand_end,7,,,,,,,,,,,"{""winners"": [{""seat"": 1, ""player_id"": ""gpt_5_4"", ""amount"": 47, ""hand_name"": ""Two Pair""}], ""last_pot"": 0}"
+hand_start,8,,,,,,3,4,5,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1000}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1029}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 985}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1000}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1029}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 983}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 778}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""pot"": 7}"
+action,8,1,grok_ai,fold,,preflop,3,4,5,2,5,
+action,8,2,gpt_5_4,raise,15,preflop,3,4,5,2,5,
+action,8,3,claude_4_6_opus,fold,,preflop,3,4,5,2,5,
+action,8,4,gemini_3_1,fold,,preflop,3,4,5,2,5,
+action,8,5,deepseek_v3_2,fold,,preflop,3,4,5,2,5,
+action,8,6,mistral_large_3,fold,,none,,,,2,5,
+hand_end,8,,,,,,,,,,,"{""winners"": [{""seat"": 1, ""player_id"": ""gpt_5_4"", ""amount"": 22, ""hand_name"": ""fold""}], ""last_pot"": 0}"
+hand_start,9,,,,,,4,5,6,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1007}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1029}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 983}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 778}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1007}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1029}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 983}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 776}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1207}}, ""pot"": 7}"
+action,9,1,gpt_5_4,call,,preflop,4,5,6,2,5,
+action,9,2,claude_4_6_opus,call,,preflop,4,5,6,2,5,
+action,9,3,gemini_3_1,fold,,preflop,4,5,6,2,5,
+action,9,4,deepseek_v3_2,call,,preflop,4,5,6,2,5,
+action,9,5,mistral_large_3,call,,flop,4,5,6,2,5,
+action,9,6,mistral_large_3,check,,turn,4,5,6,2,5,
+action,9,7,mistral_large_3,check,,river,4,5,6,2,5,
+action,9,8,mistral_large_3,check,,none,,,,2,5,
+hand_end,9,,,,,,,,,,,"{""winners"": [{""seat"": 1, ""player_id"": ""gpt_5_4"", ""amount"": 25, ""hand_name"": ""Flush""}], ""last_pot"": 0}"
+hand_start,10,,,,,,5,6,1,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1027}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 978}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1207}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1022}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 978}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1205}}, ""pot"": 7}"
+action,10,1,claude_4_6_opus,fold,,preflop,5,6,1,2,5,
+action,10,2,gemini_3_1,fold,,preflop,5,6,1,2,5,
+action,10,3,deepseek_v3_2,fold,,preflop,5,6,1,2,5,
+action,10,4,mistral_large_3,fold,,preflop,5,6,1,2,5,
+action,10,5,grok_ai,call,,flop,5,6,1,2,5,
+action,10,6,grok_ai,check,,turn,5,6,1,2,5,
+action,10,7,grok_ai,check,,river,5,6,1,2,5,
+action,10,8,grok_ai,check,,none,,,,2,5,
+hand_end,10,,,,,,,,,,,"{""winners"": [{""seat"": 6, ""player_id"": ""grok_ai"", ""amount"": 10, ""hand_name"": ""Two Pair""}], ""last_pot"": 0}"
+hand_start,11,,,,,,6,1,2,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1022}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 978}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1020}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1019}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 978}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""pot"": 7}"
+action,11,1,gemini_3_1,fold,,preflop,6,1,2,2,5,
+action,11,2,deepseek_v3_2,fold,,preflop,6,1,2,2,5,
+action,11,3,mistral_large_3,fold,,preflop,6,1,2,2,5,
+action,11,4,grok_ai,fold,,preflop,6,1,2,2,5,
+action,11,5,gpt_5_4,call,,flop,6,1,2,2,5,
+action,11,6,gpt_5_4,check,,turn,6,1,2,2,5,
+action,11,7,gpt_5_4,check,,river,6,1,2,2,5,
+action,11,8,gpt_5_4,check,,none,,,,2,5,
+hand_end,11,,,,,,,,,,,"{""winners"": [{""seat"": 1, ""player_id"": ""gpt_5_4"", ""amount"": 10, ""hand_name"": ""Two Pair""}], ""last_pot"": 0}"
+hand_start,12,,,,,,1,2,3,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1027}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1019}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 991}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 978}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1027}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1017}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 986}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 978}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""pot"": 7}"
+action,12,1,deepseek_v3_2,fold,,preflop,1,2,3,2,5,
+action,12,2,mistral_large_3,fold,,preflop,1,2,3,2,5,
+action,12,3,grok_ai,fold,,preflop,1,2,3,2,5,
+action,12,4,gpt_5_4,call,,preflop,1,2,3,2,5,
+action,12,5,claude_4_6_opus,fold,,flop,1,2,3,2,5,
+action,12,6,gemini_3_1,fold,,none,,,,2,5,
+hand_end,12,,,,,,,,,,,"{""winners"": [{""seat"": 1, ""player_id"": ""gpt_5_4"", ""amount"": 12, ""hand_name"": ""fold""}], ""last_pot"": 0}"
+hand_start,13,,,,,,2,3,4,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1034}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1017}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 986}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 978}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1034}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1017}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 984}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 973}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""pot"": 7}"
+action,13,1,mistral_large_3,fold,,preflop,2,3,4,2,5,
+action,13,2,grok_ai,fold,,preflop,2,3,4,2,5,
+action,13,3,gpt_5_4,fold,,preflop,2,3,4,2,5,
+action,13,4,claude_4_6_opus,raise,12,preflop,2,3,4,2,5,
+action,13,5,gemini_3_1,fold,,preflop,2,3,4,2,5,
+action,13,6,deepseek_v3_2,fold,,none,,,,2,5,
+hand_end,13,,,,,,,,,,,"{""winners"": [{""seat"": 2, ""player_id"": ""claude_4_6_opus"", ""amount"": 19, ""hand_name"": ""fold""}], ""last_pot"": 0}"
+hand_start,14,,,,,,3,4,5,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1034}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 984}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 973}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 773}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1034}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 984}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 971}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 768}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""pot"": 7}"
+action,14,1,grok_ai,fold,,preflop,3,4,5,2,5,
+action,14,2,gpt_5_4,call,,preflop,3,4,5,2,5,
+action,14,3,claude_4_6_opus,fold,,preflop,3,4,5,2,5,
+action,14,4,gemini_3_1,fold,,preflop,3,4,5,2,5,
+action,14,5,deepseek_v3_2,call,,flop,3,4,5,2,5,
+action,14,6,deepseek_v3_2,check,,turn,3,4,5,2,5,
+action,14,7,deepseek_v3_2,check,,river,3,4,5,2,5,
+action,14,8,deepseek_v3_2,check,,none,,,,2,5,
+hand_end,14,,,,,,,,,,,"{""winners"": [{""seat"": 5, ""player_id"": ""mistral_large_3"", ""amount"": 15, ""hand_name"": ""Two Pair""}], ""last_pot"": 0}"
+hand_start,15,,,,,,4,5,6,2,5,"{""stacks_before_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1029}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 984}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 968}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 783}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1212}}, ""stacks_after_blinds"": {""seat_1"": {""player_id"": ""gpt_5_4"", ""stack"": 1029}, ""seat_2"": {""player_id"": ""claude_4_6_opus"", ""stack"": 1024}, ""seat_3"": {""player_id"": ""gemini_3_1"", ""stack"": 984}, ""seat_4"": {""player_id"": ""deepseek_v3_2"", ""stack"": 968}, ""seat_5"": {""player_id"": ""mistral_large_3"", ""stack"": 781}, ""seat_6"": {""player_id"": ""grok_ai"", ""stack"": 1207}}, ""pot"": 7}"
+action,15,1,gpt_5_4,fold,,preflop,4,5,6,2,5,
+action,15,2,claude_4_6_opus,raise,12,preflop,4,5,6,2,5,
+action,15,3,gemini_3_1,fold,,preflop,4,5,6,2,5,
+action,15,4,deepseek_v3_2,fold,,preflop,4,5,6,2,5,
+action,15,5,mistral_large_3,fold,,preflop,4,5,6,2,5,
+action,15,6,grok_ai,call,,flop,4,5,6,2,5,
+action,15,7,grok_ai,check,,turn,4,5,6,2,5,
+action,15,8,grok_ai,check,,river,4,5,6,2,5,
+action,15,9,grok_ai,check,,none,,,,2,5,
+hand_end,15,,,,,,,,,,,"{""winners"": [{""seat"": 2, ""player_id"": ""claude_4_6_opus"", ""amount"": 26, ""hand_name"": ""High Card""}], ""last_pot"": 0}"
