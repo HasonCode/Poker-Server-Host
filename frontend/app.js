@@ -98,7 +98,7 @@
 
   /* ── helpers ──────────────────────────────────────── */
 
-  function tableId() { return (tableIdInput.value || "demo").trim() || "demo"; }
+  function tableId() { return (tableIdInput.value || "players").trim() || "players"; }
 
   function apiBase(tid) {
     return "/v1/tables/" + encodeURIComponent(tid || tableId());
@@ -709,7 +709,6 @@
     const file = botFileInput.files[0];
     if (!file) { botStatusEl.textContent = "Select a .py or .lua file first."; return; }
     const name = (botNameInput.value || "").trim() || file.name.replace(/\.\w+$/, "");
-    const chips = parseInt(botChipsInput.value, 10) || 500;
     botStatusEl.textContent = "Reading file…";
 
     const code = await file.text();

@@ -167,7 +167,11 @@ local function create_server_state()
         buy_in_chips = 1000,
         hidden = true, -- omit from GET /v1/tables; admins still see it in /admin/api/tables
       }),
-      players = create_table_context("players", 10, { buy_in_chips = 500, zero_chips = "rebuy" }),
+      players = create_table_context("players", 10, {
+        buy_in_chips = 500,
+        rebuy_amount = 500,
+        zero_chips = "rebuy",
+      }),
     },
     pending_joins = {},
   }
