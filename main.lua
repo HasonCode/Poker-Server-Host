@@ -705,6 +705,35 @@ local function run_http()
     return filter_snapshot_for_player(table_snapshot(c), auth_pid, c.tbl)
   end)
 
+  --- Minimal response: whether the authenticated player must act now.
+  --- Requires X-Player-Token from POST .../join.
+  srv:route("GET", "/v1/tables/:id/my-turn", function(req, params, s)
+    local c = resolve_table(params, s)
+    if not c then return not_found_table end
+    local auth_pid = resolve_auth_player(req, c)
+    if not auth_pid then
+      return {
+        "401 Unauthorized",
+        api.error_body(
+          "unauthorized",
+          "X-Player-Token header required (returned by POST /v1/tables/{id}/join)."
+        ),
+      }
+    end
+    table_snapshot(c)
+    local seat = c.tbl:seat_for_player(auth_pid)
+    if not seat then
+      return {
+        "404 Not Found",
+        api.error_body("not_seated", "Token player is not seated at this table."),
+      }
+    end
+    local h = c.hand
+    local ats = h.action_to_seat
+    local is_my_turn = h.status == "active" and ats ~= nil and ats == seat
+    return { ok = true, player_id = auth_pid, is_my_turn = is_my_turn }
+  end)
+
   srv:route("POST", "/v1/tables/:id/join", function(req, params, s)
     local c = resolve_table(params, s)
     if not c then return not_found_table end
