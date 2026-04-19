@@ -215,6 +215,7 @@ function M.new(opts)
     static_root = opts.static_root,
     tick = opts.tick,
     on_request_log = opts.on_request_log,
+    request_log_enrich = opts.request_log_enrich,
   }
   return setmetatable(state, { __index = M })
 end
@@ -338,14 +339,18 @@ function M:serve_one()
     end
     local code = tonumber((status_line or ""):match("^(%d%d%d)")) or 0
     local ms = math.floor((os.clock() - t0) * 1000 + 0.5)
-    self.on_request_log({
+    local entry = {
       method = req.method or "?",
       path = full_path,
       status = code,
       status_line = status_line,
       ms = ms,
       kind = kind or "api",
-    })
+    }
+    if self.request_log_enrich then
+      self.request_log_enrich(entry, req)
+    end
+    self.on_request_log(entry)
   end
 
   local handler, params = self:match_handler(req.method, req.path)

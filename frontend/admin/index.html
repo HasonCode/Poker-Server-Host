@@ -36,8 +36,11 @@
 
       <!-- HTTP request log (admin-only) -->
       <section class="panel" id="requestLogPanel">
-        <h2>HTTP request log</h2>
-        <p class="sub">Recent requests handled by this server (newest first). Refreshes with the toolbar refresh and the tables poll.</p>
+        <div class="request-log-header">
+          <h2>HTTP request log</h2>
+          <button type="button" id="requestLogDownloadBtn" class="btn btn-sm">Download JSON</button>
+        </div>
+        <p class="sub">Recent requests handled by this server (newest first). Refreshes with the toolbar refresh and the tables poll. <strong>Table</strong> / <strong>Player</strong> are filled when the URL, JSON body, or session token allows (player is the in-game <code>player_id</code>).</p>
         <p class="err" id="requestLogErr"></p>
         <div class="api-log-wrap">
           <table class="data-table api-log-table">
@@ -46,6 +49,8 @@
                 <th>Time (UTC)</th>
                 <th>Method</th>
                 <th>Path</th>
+                <th>Table</th>
+                <th>Player</th>
                 <th>Status</th>
                 <th>ms</th>
                 <th>Kind</th>

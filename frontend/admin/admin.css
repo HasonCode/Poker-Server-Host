@@ -547,6 +547,19 @@ h3 {
 
 /* ── API request log ─────────────────────────────── */
 
+.request-log-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.request-log-header h2 {
+  margin: 0;
+}
+
 .api-log-wrap {
   max-height: 22rem;
   overflow: auto;

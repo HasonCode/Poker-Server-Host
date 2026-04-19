@@ -601,6 +601,8 @@ local function run_http()
         status = 408,
         status_line = "408 Request Timeout",
         kind = "join_deferred",
+        table_id = tostring(c.tbl.id),
+        player_id = j and j.player_id and tostring(j.player_id) or nil,
       })
       pcall(function()
         client:close()
@@ -620,6 +622,8 @@ local function run_http()
         status = tonumber((payload[1] or ""):match("^(%d%d%d)")) or 0,
         status_line = payload[1],
         kind = "join_deferred",
+        table_id = tostring(c.tbl.id),
+        player_id = j and j.player_id and tostring(j.player_id) or nil,
       })
       pcall(function()
         client:close()
@@ -633,6 +637,8 @@ local function run_http()
       status = 200,
       status_line = "200 OK",
       kind = "join_deferred",
+      table_id = tostring(c.tbl.id),
+      player_id = j and j.player_id and tostring(j.player_id) or nil,
     })
     pcall(function()
       client:close()
@@ -655,6 +661,37 @@ local function run_http()
     end
   end
 
+  --- Fill table_id / player_id when present in path, JSON body, or X-Player-Token (per-table session).
+  local function request_log_enrich(entry, req)
+    local path = req.path or ""
+    local tid = path:match("^/v1/tables/([^/]+)/") or path:match("^/admin/api/tables/([^/]+)/")
+    if not tid and type(req.json) == "table" and req.json.table_id then
+      tid = tostring(req.json.table_id)
+    end
+    if tid then
+      entry.table_id = tid
+    end
+    local pid = nil
+    if type(req.json) == "table" then
+      local jp = req.json.player_id
+      if jp and tostring(jp) ~= "" then
+        pid = tostring(jp)
+      end
+    end
+    if not pid then
+      local tok = req.headers and req.headers["x-player-token"]
+      if tok and tok ~= "" and tid then
+        local c = state.tables and state.tables[tid]
+        if c and c.token_to_player then
+          pid = c.token_to_player[tok]
+        end
+      end
+    end
+    if pid then
+      entry.player_id = pid
+    end
+  end
+
   local function on_request_log(entry)
     local p = entry.path or ""
     if p:match("^/admin/api/request%-log") then
@@ -672,6 +709,7 @@ local function run_http()
     static_root = root .. "/frontend",
     tick = process_pending_joins,
     on_request_log = on_request_log,
+    request_log_enrich = request_log_enrich,
   })
 
   local function resolve_table(params, s)
@@ -1141,6 +1179,27 @@ local function run_http()
     local sess, err2 = require_admin(req)
     if not sess then return err2 end
     return { ok = true, entries = state.api_request_log or {} }
+  end)
+
+  srv:route("GET", "/admin/api/request-log/download", function(req)
+    local sess, err2 = require_admin(req)
+    if not sess then return err2 end
+    local payload = {
+      ok = true,
+      exported_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+      entries = state.api_request_log or {},
+    }
+    local body = json.encode(payload)
+    local fname = "poker-request-log-" .. os.date("!%Y%m%d-%H%M%S") .. "Z.json"
+    return {
+      __raw = true,
+      status = "200 OK",
+      headers = {
+        ["Content-Type"] = "application/json; charset=utf-8",
+        ["Content-Disposition"] = 'attachment; filename="' .. fname .. '"',
+      },
+      body = body,
+    }
   end)
 
   -- ── Admin: API endpoints ───────────────────────────────────────────────

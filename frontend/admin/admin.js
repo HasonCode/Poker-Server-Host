@@ -13,6 +13,7 @@
   const requestLogTbody = $("#requestLogTbody");
   const requestLogErr = $("#requestLogErr");
   const requestLogEmpty = $("#requestLogEmpty");
+  const requestLogDownloadBtn = $("#requestLogDownloadBtn");
 
   const tablesList   = $("#tablesList");
   const createTableForm = $("#createTableForm");
@@ -176,6 +177,12 @@
       tdP.className = "mono api-log-path";
       tdP.textContent = path;
       tdP.setAttribute("title", path);
+      const tdTbl = document.createElement("td");
+      tdTbl.className = "mono";
+      tdTbl.textContent = row.table_id != null && row.table_id !== "" ? String(row.table_id) : "—";
+      const tdPl = document.createElement("td");
+      tdPl.className = "mono";
+      tdPl.textContent = row.player_id != null && row.player_id !== "" ? String(row.player_id) : "—";
       const tdSt = document.createElement("td");
       tdSt.textContent = String(row.status ?? "");
       const tdMs = document.createElement("td");
@@ -186,6 +193,8 @@
       tr.appendChild(tdTs);
       tr.appendChild(tdM);
       tr.appendChild(tdP);
+      tr.appendChild(tdTbl);
+      tr.appendChild(tdPl);
       tr.appendChild(tdSt);
       tr.appendChild(tdMs);
       tr.appendChild(tdK);
@@ -198,6 +207,45 @@
     try {
       const data = await apiFetch("GET", "/admin/api/request-log");
       renderRequestLog(data.entries || []);
+    } catch (e) {
+      if (requestLogErr) requestLogErr.textContent = e.message;
+    }
+  }
+
+  async function downloadRequestLogJson() {
+    if (!isLoggedIn) return;
+    if (requestLogErr) requestLogErr.textContent = "";
+    try {
+      const res = await fetch("/admin/api/request-log/download", { credentials: "same-origin" });
+      if (res.status === 401) {
+        showLogin();
+        throw new Error("Session expired. Please log in again.");
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        let msg = res.statusText;
+        try {
+          const j = JSON.parse(text);
+          if (j.error && j.error.message) msg = j.error.message;
+        } catch { /* ignore */ }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      let name = "poker-request-log.json";
+      const disp = res.headers.get("Content-Disposition");
+      if (disp) {
+        const m = disp.match(/filename="([^"]+)"/i) || disp.match(/filename=([^;\s]+)/i);
+        if (m) name = m[1].replace(/^["']|["']$/g, "");
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     } catch (e) {
       if (requestLogErr) requestLogErr.textContent = e.message;
     }
@@ -604,6 +652,10 @@
     if (isLoggedIn) loadTables();
     else checkSession();
   });
+
+  if (requestLogDownloadBtn) {
+    requestLogDownloadBtn.addEventListener("click", () => downloadRequestLogJson());
+  }
 
   if (spectateEnabled) {
     spectateEnabled.addEventListener("change", () => {
