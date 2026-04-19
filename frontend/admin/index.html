@@ -34,6 +34,16 @@
     <!-- Dashboard (hidden until logged in) -->
     <div class="dashboard hidden" id="dashboard">
 
+      <section class="panel server-settings-panel">
+        <h2>Server settings</h2>
+        <p class="sub">Process-wide options (stored in memory; reset on server restart).</p>
+        <label class="field cb-field server-setting-row">
+          <input type="checkbox" id="strictActionQueue" />
+          <span>Strict action queue — when on, <code>POST .../actions</code> with <code>queue</code> omitted returns <code>wrong_turn</code> if it is not this player’s turn on an active hand (use <code>queue: true</code> to precache).</span>
+        </label>
+        <p class="err" id="serverSettingsErr"></p>
+      </section>
+
       <!-- HTTP request log (admin-only) -->
       <section class="panel" id="requestLogPanel">
         <div class="request-log-header">

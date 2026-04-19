@@ -111,7 +111,9 @@ Optional:
   - **`queue: false`** — If it is **not** your turn on an active hand, the server returns **`wrong_turn`** instead of storing.
   - **Omitted** — If it is **not** your turn (or idle and you would **not** be first to act after blinds), the server **stores** the action for you and returns **`queued: true`**. Each player keeps at most one queued action; a new submission **replaces** the previous.
 
-**Queue execution:** When it becomes your turn, the server applies your queued action (if any) before bots act. If the queued action is no longer legal (e.g. bet size changed), it is **discarded** and logged; you must act again.
+**Queue execution:** When it becomes your turn, the server applies your queued action (if any) before bots act. If the queued action is no longer legal (e.g. bet size changed), it is **discarded** and logged; you must act again. Queued actions taken while the hand is **active** are tagged with the current **`street`**; if the betting round advances before your turn, the queue entry is **dropped** (so a precached move cannot fire on a later street).
+
+**Strict queue (optional):** When enabled in the **admin console** (Server settings → *Strict action queue*), if **`queue` is omitted** and the hand is **active** but it is **not** your turn, the server returns **`wrong_turn`** instead of storing (same as **`queue: false`**). Explicit **`queue: true`** still allows precaching off-turn. The flag is stored in memory and resets when the server restarts; default is **off**.
 
 **Turn order:** Only the player in **`hand.action_to_seat`** may act **immediately** without using the queue. If the hand is **`idle`**, the first valid **non-queue-only** action from the **first player to act** preflop **starts** a new hand (posts blinds, sets positions). If you are **not** first to act and the hand is idle, your request is **queued** (unless you used **`queue: false`**, which only applies to **wrong_turn** on an **active** hand).
 

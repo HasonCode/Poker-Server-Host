@@ -178,6 +178,8 @@ local function create_server_state()
     pending_joins = {},
     api_request_log = {},
     api_request_log_seq = 0,
+    --- When true, POST /actions with queue omitted returns wrong_turn if not your turn (active hand).
+    strict_action_queue = false,
   }
 end
 
@@ -264,12 +266,22 @@ local function validate_action_shape(action, amount)
   return { action = action, amount = nil }, nil
 end
 
+--- Queue metadata: idle queues apply after the hand starts; active queues are tied to hand.street
+--- so precached actions cannot fire on a later betting round.
+local function queue_entry(act, amt, hand)
+  if hand.status == "idle" then
+    return { action = act, amount = amt, while_idle = true }
+  end
+  return { action = act, amount = amt, street = hand.street }
+end
+
 --- @return "applied"|"queued"|nil, err
-local function submit_action(ctx, player_id, action, amount, queue)
+local function submit_action(ctx, player_id, action, amount, queue, strict_queue)
   local tbl = ctx.tbl
   local hand = ctx.hand
   local q = queue == true
   local qfalse = queue == false
+  strict_queue = strict_queue == true
 
   local ent, verr = validate_action_shape(action, amount)
   if not ent then
@@ -287,7 +299,7 @@ local function submit_action(ctx, player_id, action, amount, queue)
   end
 
   if q and hand.status == "idle" then
-    ctx.action_queue[player_id] = { action = act, amount = amt }
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand)
     return "queued"
   end
 
@@ -299,7 +311,7 @@ local function submit_action(ctx, player_id, action, amount, queue)
       end
       return "applied"
     end
-    ctx.action_queue[player_id] = { action = act, amount = amt }
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand)
     return "queued"
   end
 
@@ -315,7 +327,7 @@ local function submit_action(ctx, player_id, action, amount, queue)
       end
       return "applied"
     end
-    ctx.action_queue[player_id] = { action = act, amount = amt }
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand)
     return "queued"
   end
 
@@ -330,7 +342,10 @@ local function submit_action(ctx, player_id, action, amount, queue)
   if qfalse then
     return nil, "wrong_turn"
   end
-  ctx.action_queue[player_id] = { action = act, amount = amt }
+  if strict_queue and hand.status == "active" then
+    return nil, "wrong_turn"
+  end
+  ctx.action_queue[player_id] = queue_entry(act, amt, hand)
   return "queued"
 end
 
@@ -938,7 +953,7 @@ local function run_http()
       return { "403 Forbidden", api.error_body("forbidden", "Token does not match player_id.") }
     end
 
-    local result, err = submit_action(c, pid_str, tostring(action), amount, q)
+    local result, err = submit_action(c, pid_str, tostring(action), amount, q, s.strict_action_queue)
     if not result then
       return action_http_error(err)
     end
@@ -1179,6 +1194,28 @@ local function run_http()
     local sess, err2 = require_admin(req)
     if not sess then return err2 end
     return { ok = true, entries = state.api_request_log or {} }
+  end)
+
+  srv:route("GET", "/admin/api/server-settings", function(req, _, s)
+    local sess, err2 = require_admin(req)
+    if not sess then return err2 end
+    return { ok = true, strict_action_queue = s.strict_action_queue == true }
+  end)
+
+  srv:route("POST", "/admin/api/server-settings", function(req, _, s)
+    local sess, err2 = require_admin(req)
+    if not sess then return err2 end
+    if type(req.json) ~= "table" then
+      return { "400 Bad Request", api.error_body("bad_request", "JSON body required.") }
+    end
+    local v = req.json.strict_action_queue
+    if v ~= nil and type(v) ~= "boolean" then
+      return { "400 Bad Request", api.error_body("bad_request", "strict_action_queue must be a boolean.") }
+    end
+    if v ~= nil then
+      s.strict_action_queue = v
+    end
+    return { ok = true, strict_action_queue = s.strict_action_queue == true }
   end)
 
   srv:route("GET", "/admin/api/request-log/download", function(req)

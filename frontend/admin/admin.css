@@ -560,6 +560,15 @@ h3 {
   margin: 0;
 }
 
+.server-settings-panel .server-setting-row {
+  align-items: flex-start;
+  max-width: 44rem;
+}
+
+.server-settings-panel .server-setting-row span {
+  line-height: 1.45;
+}
+
 .api-log-wrap {
   max-height: 22rem;
   overflow: auto;

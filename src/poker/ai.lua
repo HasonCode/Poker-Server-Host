@@ -87,16 +87,32 @@ function M.run_until_human(ctx)
     if type(queue) == "table" then
       local qent = queue[pid]
       if type(qent) == "table" and qent.action then
-        queue[pid] = nil
-        local ok, err = hand:apply_action(tbl, pid, qent.action, qent.amount)
-        if not ok then
+        if qent.while_idle and hand.status ~= "active" then
+          return
+        end
+        local stale = not qent.while_idle
+          and hand.status == "active"
+          and qent.street
+          and qent.street ~= hand.street
+        if stale then
+          queue[pid] = nil
           io.stderr:write(
-            "[poker-server] Queued action discarded for "
+            "[poker-server] Queued action dropped (betting round changed) for "
               .. tostring(pid)
-              .. ": "
-              .. tostring(err)
               .. "\n"
           )
+        else
+          queue[pid] = nil
+          local ok, err = hand:apply_action(tbl, pid, qent.action, qent.amount)
+          if not ok then
+            io.stderr:write(
+              "[poker-server] Queued action discarded for "
+                .. tostring(pid)
+                .. ": "
+                .. tostring(err)
+                .. "\n"
+            )
+          end
         end
       elseif not ai_players[pid] then
         return

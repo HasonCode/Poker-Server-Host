@@ -14,6 +14,8 @@
   const requestLogErr = $("#requestLogErr");
   const requestLogEmpty = $("#requestLogEmpty");
   const requestLogDownloadBtn = $("#requestLogDownloadBtn");
+  const strictActionQueue = $("#strictActionQueue");
+  const serverSettingsErr = $("#serverSettingsErr");
 
   const tablesList   = $("#tablesList");
   const createTableForm = $("#createTableForm");
@@ -152,8 +154,37 @@
         await loadTableStats(selectedTable);
       }
       await loadRequestLog();
+      await loadServerSettings();
     } catch (e) {
       createErr.textContent = e.message;
+    }
+  }
+
+  let serverSettingsSaving = false;
+
+  async function loadServerSettings() {
+    if (!isLoggedIn || !strictActionQueue) return;
+    if (serverSettingsSaving) return;
+    try {
+      if (serverSettingsErr) serverSettingsErr.textContent = "";
+      const d = await apiFetch("GET", "/admin/api/server-settings");
+      strictActionQueue.checked = !!d.strict_action_queue;
+    } catch (e) {
+      if (serverSettingsErr) serverSettingsErr.textContent = e.message;
+    }
+  }
+
+  async function saveServerSettings(checked) {
+    if (!isLoggedIn) return;
+    serverSettingsSaving = true;
+    if (serverSettingsErr) serverSettingsErr.textContent = "";
+    try {
+      await apiFetch("POST", "/admin/api/server-settings", { strict_action_queue: !!checked });
+    } catch (e) {
+      if (serverSettingsErr) serverSettingsErr.textContent = e.message;
+      await loadServerSettings();
+    } finally {
+      serverSettingsSaving = false;
     }
   }
 
@@ -655,6 +686,12 @@
 
   if (requestLogDownloadBtn) {
     requestLogDownloadBtn.addEventListener("click", () => downloadRequestLogJson());
+  }
+
+  if (strictActionQueue) {
+    strictActionQueue.addEventListener("change", () => {
+      saveServerSettings(strictActionQueue.checked);
+    });
   }
 
   if (spectateEnabled) {
