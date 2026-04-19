@@ -34,6 +34,29 @@
     <!-- Dashboard (hidden until logged in) -->
     <div class="dashboard hidden" id="dashboard">
 
+      <!-- HTTP request log (admin-only) -->
+      <section class="panel" id="requestLogPanel">
+        <h2>HTTP request log</h2>
+        <p class="sub">Recent requests handled by this server (newest first). Refreshes with the toolbar refresh and the tables poll.</p>
+        <p class="err" id="requestLogErr"></p>
+        <div class="api-log-wrap">
+          <table class="data-table api-log-table">
+            <thead>
+              <tr>
+                <th>Time (UTC)</th>
+                <th>Method</th>
+                <th>Path</th>
+                <th>Status</th>
+                <th>ms</th>
+                <th>Kind</th>
+              </tr>
+            </thead>
+            <tbody id="requestLogTbody"></tbody>
+          </table>
+        </div>
+        <p class="sub hidden" id="requestLogEmpty">No requests recorded yet.</p>
+      </section>
+
       <!-- Tables list -->
       <section class="panel">
         <h2>Tables</h2>
@@ -212,19 +235,7 @@
         <h3>Running Bots</h3>
         <div id="botList"></div>
         <p class="sub" id="noBots">No bots running.</p>
-        <details class="bot-upload-details">
-          <summary class="sub">Upload a bot</summary>
-          <div class="bot-upload-row">
-            <label class="field"><span>Bot name</span>
-              <input type="text" id="adminBotName" placeholder="AdminBot" />
-            </label>
-            <label class="field file-field"><span>Bot file (.py / .lua)</span>
-              <input type="file" id="adminBotFile" accept=".py,.lua" />
-            </label>
-          </div>
-          <button type="button" id="adminBotStart" class="btn btn-accent btn-sm">Upload &amp; Start</button>
-          <p class="err" id="botErr"></p>
-        </details>
+        <p class="err" id="botErr"></p>
       </section>
 
     </div>

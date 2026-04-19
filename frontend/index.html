@@ -106,50 +106,6 @@
         <p class="err" id="actErr"></p>
       </section>
 
-      <!-- bot -->
-      <section class="panel bot-panel">
-        <h2>Bot mode</h2>
-        <p class="sub">Upload a <code>.py</code> or <code>.lua</code> bot file containing a
-          <code>decide(state, me)</code> function. The server runs it as a background process.</p>
-        <div class="bot-upload-row">
-          <label class="field"><span>Bot name</span>
-            <input type="text" id="botName" value="" placeholder="MyBot" />
-          </label>
-          <label class="field file-field"><span>Bot file (.py / .lua)</span>
-            <input type="file" id="botFile" accept=".py,.lua" />
-          </label>
-        </div>
-        <div class="bot-bar">
-          <button type="button" id="botUploadStart" class="btn btn-accent btn-sm">Upload &amp; Start</button>
-          <button type="button" id="botUploadStop" class="btn btn-danger btn-sm" disabled>Stop bot</button>
-          <span class="sub" id="botStatus"></span>
-        </div>
-        <div class="bot-running-list" id="botRunningList"></div>
-        <details class="bot-help">
-          <summary class="sub">How to write a bot</summary>
-          <pre class="code-sample"><code># Python — bots/my_bot.py
-def decide(state, me):
-    hand = state["hand"]
-    cb = hand["current_bet"]
-    mri = hand["min_raise_increment"]
-    if cb + mri &lt;= me["stack"]:
-        return {"action": "raise", "amount": cb + mri}
-    return {"action": "call"}</code></pre>
-          <pre class="code-sample"><code>-- Lua — bots/my_bot.lua
-local bot_runner = require("poker.bot_runner")
-local function decide(state, me)
-  local cb = (state.hand or {}).current_bet or 0
-  local mri = (state.hand or {}).min_raise_increment or 5
-  if cb + mri &lt;= me.stack then
-    return { action = "raise", amount = cb + mri }
-  end
-  return { action = "call" }
-end
-bot_runner.run({ strategy = decide, player_id = "LuaBot" })</code></pre>
-          <p class="sub">See <code>bots/example_bot.py</code> and <code>bots/example_bot.lua</code> for full templates.</p>
-        </details>
-      </section>
-
       <!-- log -->
       <section class="panel log-panel">
         <h2>Action log</h2>

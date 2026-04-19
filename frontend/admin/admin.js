@@ -10,6 +10,10 @@
   const logoutBtn    = $("#logoutBtn");
   const refreshBtn   = $("#refreshBtn");
 
+  const requestLogTbody = $("#requestLogTbody");
+  const requestLogErr = $("#requestLogErr");
+  const requestLogEmpty = $("#requestLogEmpty");
+
   const tablesList   = $("#tablesList");
   const createTableForm = $("#createTableForm");
   const createErr    = $("#createErr");
@@ -36,9 +40,6 @@
 
   const botList      = $("#botList");
   const noBots       = $("#noBots");
-  const adminBotName = $("#adminBotName");
-  const adminBotFile = $("#adminBotFile");
-  const adminBotStart= $("#adminBotStart");
   const botErr       = $("#botErr");
 
   let isLoggedIn = false;
@@ -149,8 +150,56 @@
       if (selectedTable) {
         await loadTableStats(selectedTable);
       }
+      await loadRequestLog();
     } catch (e) {
       createErr.textContent = e.message;
+    }
+  }
+
+  function renderRequestLog(entries) {
+    if (requestLogErr) requestLogErr.textContent = "";
+    if (!requestLogTbody) return;
+    requestLogTbody.replaceChildren();
+    const list = entries || [];
+    if (requestLogEmpty) {
+      requestLogEmpty.classList.toggle("hidden", list.length > 0);
+    }
+    list.forEach((row) => {
+      const tr = document.createElement("tr");
+      const path = String(row.path || "");
+      const tdTs = document.createElement("td");
+      tdTs.className = "mono";
+      tdTs.textContent = row.timestamp || "—";
+      const tdM = document.createElement("td");
+      tdM.textContent = String(row.method || "");
+      const tdP = document.createElement("td");
+      tdP.className = "mono api-log-path";
+      tdP.textContent = path;
+      tdP.setAttribute("title", path);
+      const tdSt = document.createElement("td");
+      tdSt.textContent = String(row.status ?? "");
+      const tdMs = document.createElement("td");
+      tdMs.className = "mono";
+      tdMs.textContent = row.ms != null ? String(row.ms) : "—";
+      const tdK = document.createElement("td");
+      tdK.textContent = String(row.kind || "");
+      tr.appendChild(tdTs);
+      tr.appendChild(tdM);
+      tr.appendChild(tdP);
+      tr.appendChild(tdSt);
+      tr.appendChild(tdMs);
+      tr.appendChild(tdK);
+      requestLogTbody.appendChild(tr);
+    });
+  }
+
+  async function loadRequestLog() {
+    if (!isLoggedIn || !requestLogTbody) return;
+    try {
+      const data = await apiFetch("GET", "/admin/api/request-log");
+      renderRequestLog(data.entries || []);
+    } catch (e) {
+      if (requestLogErr) requestLogErr.textContent = e.message;
     }
   }
 
@@ -533,23 +582,6 @@
       botList.appendChild(div);
     });
   }
-
-  adminBotStart.addEventListener("click", async () => {
-    if (!selectedTable) return;
-    botErr.textContent = "";
-    const file = adminBotFile.files[0];
-    if (!file) { botErr.textContent = "Select a bot file first."; return; }
-    const name = (adminBotName.value || "").trim() || file.name.replace(/\.\w+$/, "");
-    const code = await file.text();
-    try {
-      await apiFetch("POST", "/admin/api/bot/start", {
-        table_id: selectedTable, player_id: name, code, filename: file.name,
-      });
-      await loadTables();
-    } catch (err) {
-      botErr.textContent = err.message;
-    }
-  });
 
   async function stopBot(playerId) {
     if (!selectedTable) return;

@@ -171,10 +171,34 @@ local function create_server_state()
         buy_in_chips = 500,
         rebuy_amount = 500,
         zero_chips = "rebuy",
+        action_timeout_sec = 30,
+        action_timeout_mode = "fold_only",
       }),
     },
     pending_joins = {},
+    api_request_log = {},
+    api_request_log_seq = 0,
   }
+end
+
+--- Ring buffer of recent HTTP requests (newest first). Used by admin UI and optional env POKER_API_LOG_MAX.
+local function append_api_request_log(state, entry)
+  if not state or not entry then
+    return
+  end
+  state.api_request_log_seq = (state.api_request_log_seq or 0) + 1
+  entry.seq = state.api_request_log_seq
+  entry.timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+  local log = state.api_request_log
+  if not log then
+    state.api_request_log = {}
+    log = state.api_request_log
+  end
+  table.insert(log, 1, entry)
+  local cap = tonumber(os.getenv("POKER_API_LOG_MAX") or "500") or 500
+  while #log > cap do
+    table.remove(log)
+  end
 end
 
 local function detect_lang(filename, content)
@@ -571,6 +595,13 @@ local function run_http()
           "Timed out waiting to join. A seat opens between hands when the table is not full."
         )
       )
+      append_api_request_log(state, {
+        method = "POST",
+        path = "/v1/tables/" .. tostring(c.tbl.id) .. "/join",
+        status = 408,
+        status_line = "408 Request Timeout",
+        kind = "join_deferred",
+      })
       pcall(function()
         client:close()
       end)
@@ -583,12 +614,26 @@ local function run_http()
     end
     if kind == "error" then
       http_mod.send_json_response(client, payload[1], payload[2])
+      append_api_request_log(state, {
+        method = "POST",
+        path = "/v1/tables/" .. tostring(c.tbl.id) .. "/join",
+        status = tonumber((payload[1] or ""):match("^(%d%d%d)")) or 0,
+        status_line = payload[1],
+        kind = "join_deferred",
+      })
       pcall(function()
         client:close()
       end)
       return true
     end
     http_mod.send_json_response(client, "200 OK", payload)
+    append_api_request_log(state, {
+      method = "POST",
+      path = "/v1/tables/" .. tostring(c.tbl.id) .. "/join",
+      status = 200,
+      status_line = "200 OK",
+      kind = "join_deferred",
+    })
     pcall(function()
       client:close()
     end)
@@ -610,6 +655,14 @@ local function run_http()
     end
   end
 
+  local function on_request_log(entry)
+    local p = entry.path or ""
+    if p:match("^/admin/api/request%-log") then
+      return
+    end
+    append_api_request_log(state, entry)
+  end
+
   local srv, err = http_mod.new({
     host = os.getenv("POKER_HOST") or "*",
     port = tonumber(os.getenv("POKER_PORT") or "8080") or 8080,
@@ -618,6 +671,7 @@ local function run_http()
     end,
     static_root = root .. "/frontend",
     tick = process_pending_joins,
+    on_request_log = on_request_log,
   })
 
   local function resolve_table(params, s)
@@ -1081,6 +1135,12 @@ local function run_http()
     local sess, err2 = require_admin(req)
     if not sess then return err2 end
     return { ok = true, email = sess.email }
+  end)
+
+  srv:route("GET", "/admin/api/request-log", function(req)
+    local sess, err2 = require_admin(req)
+    if not sess then return err2 end
+    return { ok = true, entries = state.api_request_log or {} }
   end)
 
   -- ── Admin: API endpoints ───────────────────────────────────────────────

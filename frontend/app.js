@@ -42,13 +42,6 @@
   const actErr         = $("#actErr");
   const actionTimerHint = $("#actionTimerHint");
 
-  const botNameInput   = $("#botName");
-  const botFileInput   = $("#botFile");
-  const botUploadStart = $("#botUploadStart");
-  const botUploadStop  = $("#botUploadStop");
-  const botStatusEl    = $("#botStatus");
-  const botRunningList = $("#botRunningList");
-
   const actionLog      = $("#actionLog");
 
   /* ── state ────────────────────────────────────────── */
@@ -58,7 +51,6 @@
   let mySeat   = null;
   let lastData = null;
   let pollTimer = null;
-  let activeBotName = null;
   let wasMyTurn = false;
   const tableBuyIns = Object.create(null);
 
@@ -93,8 +85,6 @@
       return "";
     }
   }
-
-  const botPanel = $(".bot-panel");
 
   /* ── helpers ──────────────────────────────────────── */
 
@@ -560,10 +550,6 @@
     mySeat = null;
     lastData = null;
     wasMyTurn = false;
-    activeBotName = null;
-    botUploadStart.disabled = false;
-    botUploadStop.disabled = true;
-    botStatusEl.textContent = "";
     actErr.textContent = "";
     if (joinErr) joinErr.textContent = "";
     connState.textContent = "Not seated";
@@ -703,83 +689,6 @@
     }
   }
 
-  /* ── bot (file upload → server-side) ─────────────── */
-
-  botUploadStart.addEventListener("click", async () => {
-    const file = botFileInput.files[0];
-    if (!file) { botStatusEl.textContent = "Select a .py or .lua file first."; return; }
-    const name = (botNameInput.value || "").trim() || file.name.replace(/\.\w+$/, "");
-    botStatusEl.textContent = "Reading file…";
-
-    const code = await file.text();
-    try {
-      const resp = await apiFetch("POST", apiBase() + "/bot/start", {
-        player_id: name,
-        code,
-        filename: file.name,
-      });
-      activeBotName = name;
-      botUploadStart.disabled = true;
-      botUploadStop.disabled = false;
-      botStatusEl.textContent = "Bot \"" + name + "\" started (pid " + resp.pid + ", " + resp.lang + ")";
-      refreshBotList();
-    } catch (err) {
-      botStatusEl.textContent = "Error: " + err.message;
-    }
-  });
-
-  botUploadStop.addEventListener("click", async () => {
-    if (!activeBotName) return;
-    try {
-      await apiFetch("POST", apiBase() + "/bot/stop", { player_id: activeBotName });
-      botStatusEl.textContent = "Bot \"" + activeBotName + "\" stopped.";
-    } catch (err) {
-      botStatusEl.textContent = "Stop error: " + err.message;
-    }
-    activeBotName = null;
-    botUploadStart.disabled = false;
-    botUploadStop.disabled = true;
-    refreshBotList();
-  });
-
-  async function refreshBotList() {
-    try {
-      const resp = await apiFetch("GET", apiBase() + "/bot/list");
-      const bots = resp.bots || [];
-      botRunningList.replaceChildren();
-      if (bots.length === 0) return;
-      bots.forEach(b => {
-        const div = document.createElement("div");
-        div.className = "bot-entry";
-        const pill = document.createElement("span");
-        pill.className = "pill active";
-        pill.textContent = b.lang;
-        const label = document.createElement("span");
-        label.textContent = b.player_id + " (pid " + b.pid + ")";
-        const stopBtn = document.createElement("button");
-        stopBtn.className = "btn btn-danger btn-sm";
-        stopBtn.textContent = "Stop";
-        stopBtn.addEventListener("click", async () => {
-          try {
-            await apiFetch("POST", apiBase() + "/bot/stop", { player_id: b.player_id });
-            if (activeBotName === b.player_id) {
-              activeBotName = null;
-              botUploadStart.disabled = false;
-              botUploadStop.disabled = true;
-            }
-            refreshBotList();
-          } catch (err) {
-            botStatusEl.textContent = "Stop error: " + err.message;
-          }
-        });
-        div.appendChild(pill);
-        div.appendChild(label);
-        div.appendChild(stopBtn);
-        botRunningList.appendChild(div);
-      });
-    } catch { /* ignore */ }
-  }
-
   /* ── table selector ───────────────────────────────── */
 
   let tableListTimer = null;
@@ -840,7 +749,7 @@
 
   /* ── init ─────────────────────────────────────────── */
 
-  refreshBtn.addEventListener("click", () => { loadTableList(); poll(); refreshBotList(); });
+  refreshBtn.addEventListener("click", () => { loadTableList(); poll(); });
   tableIdInput.addEventListener("change", () => {
     updateJoinBuyInHint();
     if (playerId) startPoll();
@@ -854,7 +763,6 @@
     gameArea.classList.remove("hidden");
     if (leaveBtn) leaveBtn.classList.add("hidden");
     if (actionPanel) actionPanel.classList.add("hidden");
-    if (botPanel) botPanel.classList.add("hidden");
     connState.textContent = "Spectate: connecting…";
     connState.className = "sub spectate-connecting";
   }
@@ -863,10 +771,8 @@
     if (spectateMode) {
       ensureTableOption(tableId());
       startPoll();
-      refreshBotList();
     } else {
       poll();
-      refreshBotList();
       startTableListPoll();
     }
   });

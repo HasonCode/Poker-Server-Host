@@ -214,6 +214,7 @@ function M.new(opts)
     routes = opts.routes or {},
     static_root = opts.static_root,
     tick = opts.tick,
+    on_request_log = opts.on_request_log,
   }
   return setmetatable(state, { __index = M })
 end
@@ -227,9 +228,16 @@ function M:match_handler(method, path)
   if exact then
     return exact, {}
   end
-  local id = path:match("^/v1/tables/([^/]+)/state$")
+  local   id = path:match("^/v1/tables/([^/]+)/state$")
   if id and method == "GET" then
     local h = self.routes["GET /v1/tables/:id/state"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
+  id = path:match("^/v1/tables/([^/]+)/my%-turn$")
+  if id and method == "GET" then
+    local h = self.routes["GET /v1/tables/:id/my-turn"]
     if h then
       return h, { table_id = id }
     end
@@ -319,6 +327,27 @@ function M:serve_one()
     return true
   end
 
+  local t0 = os.clock()
+  local function log_request(status_line, kind)
+    if not self.on_request_log then
+      return
+    end
+    local full_path = req.path
+    if req.query_string and req.query_string ~= "" then
+      full_path = full_path .. "?" .. req.query_string
+    end
+    local code = tonumber((status_line or ""):match("^(%d%d%d)")) or 0
+    local ms = math.floor((os.clock() - t0) * 1000 + 0.5)
+    self.on_request_log({
+      method = req.method or "?",
+      path = full_path,
+      status = code,
+      status_line = status_line,
+      ms = ms,
+      kind = kind or "api",
+    })
+  end
+
   local handler, params = self:match_handler(req.method, req.path)
 
   if handler then
@@ -327,6 +356,7 @@ function M:serve_one()
       local okj, decoded = pcall(json.decode, req.body)
       if not okj then
         send_json(client, "400 Bad Request", api.error_body("bad_request", "Request body must be valid JSON"))
+        log_request("400 Bad Request", "json_error")
         client:close()
         return true
       end
@@ -342,6 +372,7 @@ function M:serve_one()
         local data = f:read("*a")
         f:close()
         send_raw(client, "200 OK", mime_for(filepath), data or "")
+        log_request("200 OK", "static")
         client:close()
         return true
       end
@@ -374,6 +405,7 @@ function M:serve_one()
       return true
     elseif type(res_or_err) == "table" and res_or_err.__raw then
       send_custom(client, res_or_err.status or "200 OK", res_or_err.headers or {}, res_or_err.body or "")
+      log_request(res_or_err.status or "200 OK", "raw")
       client:close()
       return true
     elseif type(res_or_err) == "table" and res_or_err[1] then
@@ -385,6 +417,7 @@ function M:serve_one()
   end
 
   send_json(client, status, body)
+  log_request(status, "api")
   client:close()
   return true
 end

@@ -326,34 +326,6 @@ h3 {
   border: 1px solid rgba(62,207,142,.35);
 }
 
-.bot-upload-details { margin-top: 0.65rem; }
-.bot-upload-details summary { cursor: pointer; user-select: none; }
-
-.bot-upload-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.6rem 0.9rem;
-  margin: 0.5rem 0;
-}
-
-.file-field input[type="file"] {
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-
-.file-field input[type="file"]::file-selector-button {
-  background: linear-gradient(180deg, #2d3b4d, #243041);
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 0.35rem 0.7rem;
-  border-radius: 6px;
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-  margin-right: 0.5rem;
-}
-
 .pill {
   display: inline-flex;
   align-items: center;
@@ -572,3 +544,31 @@ h3 {
 
 .spec-log li { margin-bottom: 0.15rem; }
 .spec-log li b { color: var(--text); }
+
+/* ── API request log ─────────────────────────────── */
+
+.api-log-wrap {
+  max-height: 22rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.api-log-table {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.api-log-table th,
+.api-log-table td {
+  padding: 0.35rem 0.5rem;
+  vertical-align: top;
+}
+
+.api-log-path {
+  max-width: min(28rem, 55vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
