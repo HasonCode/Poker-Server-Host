@@ -47,6 +47,7 @@ function HandState.new(opts)
     folded = {},
     action_to_seat = nil,
     pending = {},
+    acted_this_street = {},
     last_raise_seat = nil,
     occupied_ring = {},
     deck = {},
@@ -158,6 +159,7 @@ function HandState:_reset_street_betting()
   self.min_raise_increment = self.bb_amount
   self.last_raise_seat = nil
   self.pending = {}
+  self.acted_this_street = {}
   for _, s in ipairs(self.occupied_ring) do
     self.contribution[s] = 0
   end
@@ -216,7 +218,23 @@ function HandState:_round_complete(tbl)
   if not self:_all_matched(tbl) then
     return false
   end
-  return self:_pending_empty()
+  if not self:_pending_empty() then
+    return false
+  end
+  -- Every non-folded player with chips must have had a turn this street.
+  -- Without this check, the first actor on a new postflop street could
+  -- "check" and instantly advance the round, skipping everyone else
+  -- (action would then land on the same seat again as the first postflop
+  -- actor on the next street). Also preserves the BB option preflop.
+  for _, s in ipairs(self.occupied_ring) do
+    if not self.folded[s] then
+      local st = tbl:get_seat(s)
+      if st and st.stack > 0 and not self.acted_this_street[s] then
+        return false
+      end
+    end
+  end
+  return true
 end
 
 function HandState:_count_active()
@@ -246,6 +264,7 @@ function HandState:_reset_between_hands()
   self.folded = {}
   self.action_to_seat = nil
   self.pending = {}
+  self.acted_this_street = {}
   self.last_raise_seat = nil
   self.button_seat = nil
   self.sb_seat = nil
@@ -479,6 +498,7 @@ function HandState:start_hand(tbl)
   self.min_raise_increment = self.bb_amount
   self.last_raise_seat = nil
   self.pending = {}
+  self.acted_this_street = {}
 
   self.deck = deck_mod.shuffle(deck_mod.new_deck())
   self.hole_cards = {}
@@ -517,23 +537,27 @@ function HandState:_log(player_id, seat, action, amount)
   }
 end
 
-function HandState:_set_next_actor(tbl, from_seat)
-  local start = next_in_ring(self.occupied_ring, from_seat)
+function HandState:_after_action(tbl, acted_seat)
+  self.acted_this_street[acted_seat] = true
+
+  if self:_round_complete(tbl) then
+    self:_advance_street_or_complete(tbl)
+    return
+  end
+
+  local start = next_in_ring(self.occupied_ring, acted_seat)
   local s = start
-  for _ = 1, #self.occupied_ring + 2 do
-    if not s then
-      break
-    end
+  local guard = 0
+  while s and guard < 32 do
+    guard = guard + 1
     if not self.folded[s] then
       local st = tbl:get_seat(s)
-      local c = self.contribution[s] or 0
-      if st and c < self.current_bet and st.stack > 0 then
-        self.action_to_seat = s
-        return
-      end
-      if self.pending[s] and st and st.stack > 0 then
-        self.action_to_seat = s
-        return
+      if st and st.stack > 0 then
+        local c = self.contribution[s] or 0
+        if c < self.current_bet or self.pending[s] or not self.acted_this_street[s] then
+          self.action_to_seat = s
+          return
+        end
       end
     end
     s = next_in_ring(self.occupied_ring, s)
@@ -541,43 +565,9 @@ function HandState:_set_next_actor(tbl, from_seat)
       break
     end
   end
-  return nil
-end
 
-function HandState:_after_action(tbl, acted_seat)
-  if self:_round_complete(tbl) then
-    self:_advance_street_or_complete(tbl)
-    return
-  end
-
-  local s = next_in_ring(self.occupied_ring, acted_seat)
-  local guard = 0
-  while s and guard < 32 do
-    guard = guard + 1
-    if not self.folded[s] then
-      local st = tbl:get_seat(s)
-      local c = self.contribution[s] or 0
-      if st and c < self.current_bet and st.stack > 0 then
-        self.action_to_seat = s
-        return
-      end
-      if self.pending[s] and st and st.stack > 0 then
-        self.action_to_seat = s
-        return
-      end
-    end
-    s = next_in_ring(self.occupied_ring, s)
-    if s == next_in_ring(self.occupied_ring, acted_seat) then
-      break
-    end
-  end
-
-  if self:_round_complete(tbl) then
-    self:_advance_street_or_complete(tbl)
-    return
-  end
-
-  self:_set_next_actor(tbl, acted_seat)
+  -- No remaining actor this street: the round is done.
+  self:_advance_street_or_complete(tbl)
 end
 
 function HandState:apply_action(tbl, player_id, action, amount)
