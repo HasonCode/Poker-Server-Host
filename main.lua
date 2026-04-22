@@ -31,7 +31,7 @@ local function join_http_error(err)
   return { row[1], api.error_body(row[2], row[3], { reason = err }) }
 end
 
-local function action_http_error(err)
+local function action_http_error(err, extra)
   local t = {
     invalid_player = { "400 Bad Request", "invalid_player", "player_id is missing or empty." },
     not_seated = { "403 Forbidden", "not_seated", "Player is not seated at this table." },
@@ -52,12 +52,21 @@ local function action_http_error(err)
     raise_not_increase = { "400 Bad Request", "raise_not_increase", "Raise must increase your total contribution this street." },
     min_raise = { "400 Bad Request", "min_raise", "Raise does not meet the minimum raise size." },
     cannot_raise_self = { "400 Bad Request", "cannot_raise_self", "You cannot raise again until another player has raised." },
+    stale_action = { "409 Conflict", "stale_action", "expected_action_seq does not match current hand.action_seq; refresh state and resubmit." },
+    token_required = { "401 Unauthorized", "token_required", "X-Player-Token header required for this action (returned by POST /v1/tables/{id}/join)." },
+    token_invalid = { "403 Forbidden", "token_invalid", "X-Player-Token does not match this player_id at this table." },
   }
   local row = t[err]
   if not row then
     return { "500 Internal Server Error", api.error_body("internal", "Action failed.") }
   end
-  return { row[1], api.error_body(row[2], row[3], { reason = err }) }
+  local details = { reason = err }
+  if type(extra) == "table" then
+    for k, v in pairs(extra) do
+      details[k] = v
+    end
+  end
+  return { row[1], api.error_body(row[2], row[3], details) }
 end
 
 local function create_table_context(id, max_seats, opts)
@@ -102,6 +111,13 @@ local function create_table_context(id, max_seats, opts)
     hand = hand,
     ai_players = ai_players,
     action_queue = {},
+    --- Queued actions dropped at apply-time (stale street, illegal, etc.).
+    --- Keyed by player_id; consumers (e.g. the player) clear after observing.
+    action_queue_drops = {},
+    --- Idempotency cache: per-player, the last (client_action_id, response).
+    --- Replaying a request with the same id returns the cached response
+    --- instead of re-applying. Bounded to one entry per player.
+    last_action_results = {},
     _prev_hand_status = nil,
     _act_turn_key = nil,
     _act_deadline = nil,
@@ -116,6 +132,54 @@ local function create_table_context(id, max_seats, opts)
     bust_counts = {}, -- player_id -> times reached 0 chips at end of hand (eject or rebuy)
     hidden = opts.hidden == true, -- if true, omitted from GET /v1/tables public list
   }
+end
+
+local IDEMPOTENCY_TTL_SEC = 60
+
+local function lookup_idempotent(ctx, player_id, client_action_id)
+  if not client_action_id or client_action_id == "" then
+    return nil
+  end
+  local cache = ctx.last_action_results
+  if not cache then
+    return nil
+  end
+  local entry = cache[player_id]
+  if not entry then
+    return nil
+  end
+  if entry.expires_at and entry.expires_at < os.clock() then
+    cache[player_id] = nil
+    return nil
+  end
+  if entry.client_action_id ~= client_action_id then
+    return nil
+  end
+  return entry.body
+end
+
+local function store_idempotent(ctx, player_id, client_action_id, body)
+  if not client_action_id or client_action_id == "" then
+    return
+  end
+  ctx.last_action_results = ctx.last_action_results or {}
+  ctx.last_action_results[player_id] = {
+    client_action_id = client_action_id,
+    body = body,
+    expires_at = os.clock() + IDEMPOTENCY_TTL_SEC,
+  }
+end
+
+local function clear_player_action_state(ctx, player_id)
+  if ctx.action_queue then
+    ctx.action_queue[player_id] = nil
+  end
+  if ctx.action_queue_drops then
+    ctx.action_queue_drops[player_id] = nil
+  end
+  if ctx.last_action_results then
+    ctx.last_action_results[player_id] = nil
+  end
 end
 
 math.randomseed(os.time() + math.floor(os.clock() * 10000))
@@ -266,17 +330,22 @@ local function validate_action_shape(action, amount)
   return { action = action, amount = nil }, nil
 end
 
---- Queue metadata: idle queues apply after the hand starts; active queues are tied to hand.street
---- so precached actions cannot fire on a later betting round.
-local function queue_entry(act, amt, hand)
-  if hand.status == "idle" then
+--- Queue metadata: idle queues (and queues from a player who isn't in the
+--- current hand) apply after the next start_hand; active queues are tagged
+--- with hand.street so precached actions cannot fire on a later betting
+--- round of the same hand.
+local function queue_entry(act, amt, hand, in_current_hand)
+  if hand.status == "idle" or not in_current_hand then
     return { action = act, amount = amt, while_idle = true }
   end
   return { action = act, amount = amt, street = hand.street }
 end
 
---- @return "applied"|"queued"|nil, err
-local function submit_action(ctx, player_id, action, amount, queue, strict_queue)
+--- @return "applied"|"queued"|nil, err [, err_details]
+local function submit_action(ctx, player_id, action, amount, queue, strict_queue, opts)
+  opts = opts or {}
+  local expected_seq = opts.expected_action_seq
+
   local tbl = ctx.tbl
   local hand = ctx.hand
   local q = queue == true
@@ -298,20 +367,47 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
     return nil, "already_folded"
   end
 
+  --- True iff this player is in the *currently active* hand. Players who
+  --- joined mid-hand are not (they wait for the next deal).
+  local in_current_hand = hand:is_seat_in_hand(seat)
+
+  --- Refuse to apply now if the client's view of action_seq is stale.
+  --- Only checked when we'd actually apply this turn (not when queuing).
+  local function check_seq_for_apply()
+    if expected_seq == nil then
+      return nil
+    end
+    if hand.status ~= "active" then
+      return nil
+    end
+    local expect_n = tonumber(expected_seq)
+    if not expect_n then
+      return "invalid_amount"
+    end
+    if hand.seq ~= expect_n then
+      return "stale_action", { current_seq = hand.seq, expected_seq = expect_n }
+    end
+    return nil
+  end
+
   if q and hand.status == "idle" then
-    ctx.action_queue[player_id] = queue_entry(act, amt, hand)
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
     return "queued"
   end
 
   if q and hand.status == "active" then
-    if hand.action_to_seat == seat then
+    if hand.action_to_seat == seat and in_current_hand then
+      local serr, sdetails = check_seq_for_apply()
+      if serr then
+        return nil, serr, sdetails
+      end
       local ok, err2 = hand:apply_action(tbl, player_id, act, amt)
       if not ok then
         return nil, err2
       end
       return "applied"
     end
-    ctx.action_queue[player_id] = queue_entry(act, amt, hand)
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
     return "queued"
   end
 
@@ -327,11 +423,29 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
       end
       return "applied"
     end
-    ctx.action_queue[player_id] = queue_entry(act, amt, hand)
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
+    return "queued"
+  end
+
+  --- hand.status == "active". If this player isn't in the current hand
+  --- (mid-hand join), they cannot act now — queue for next deal or refuse
+  --- per queue=false / strict_queue.
+  if not in_current_hand then
+    if qfalse then
+      return nil, "wrong_turn"
+    end
+    if strict_queue then
+      return nil, "wrong_turn"
+    end
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, false)
     return "queued"
   end
 
   if hand.action_to_seat == seat then
+    local serr, sdetails = check_seq_for_apply()
+    if serr then
+      return nil, serr, sdetails
+    end
     local ok, err2 = hand:apply_action(tbl, player_id, act, amt)
     if not ok then
       return nil, err2
@@ -345,7 +459,7 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
   if strict_queue and hand.status == "active" then
     return nil, "wrong_turn"
   end
-  ctx.action_queue[player_id] = queue_entry(act, amt, hand)
+  ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
   return "queued"
 end
 
@@ -363,9 +477,7 @@ local function eject_action_timeout(ctx, player_id, seat)
     end
   end
   ctx.tbl:leave_seat(seat)
-  if ctx.action_queue then
-    ctx.action_queue[player_id] = nil
-  end
+  clear_player_action_state(ctx, player_id)
   remove_player_token(ctx, player_id)
   if ctx.running_bots and ctx.running_bots[player_id] then
     kill_bot(ctx.running_bots[player_id].pid)
@@ -435,6 +547,9 @@ local function check_action_timeout(ctx)
     if ctx.action_queue then
       ctx.action_queue[pid] = nil
     end
+    if ctx.action_queue_drops then
+      ctx.action_queue_drops[pid] = nil
+    end
     return
   end
 
@@ -450,7 +565,7 @@ local function handle_zero_chips(ctx)
       ctx.bust_counts[pid] = (ctx.bust_counts[pid] or 0) + 1
       if ctx.zero_chips == "eject" then
         ctx.tbl:leave_seat(i)
-        if ctx.action_queue then ctx.action_queue[pid] = nil end
+        clear_player_action_state(ctx, pid)
         remove_player_token(ctx, pid)
         if ctx.ai_players then ctx.ai_players[pid] = nil end
         if ctx.running_bots and ctx.running_bots[pid] then
@@ -475,7 +590,7 @@ local function table_snapshot(ctx)
   ctx._prev_hand_status = h.status
   check_action_timeout(ctx)
   ai.run_until_human(ctx)
-  local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue)
+  local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue, ctx.action_queue_drops)
   snap.zero_chips = ctx.zero_chips
   snap.rebuy_amount = ctx.rebuy_amount
   snap.buy_in_chips = ctx.buy_in_chips
@@ -571,9 +686,9 @@ local function run_http()
         return "defer"
       end
     end
-    if c.hand.status ~= "idle" then
-      return "defer"
-    end
+    --- Mid-hand joins are allowed: the player takes the seat now and is
+    --- dealt in at the next start_hand. Their action submissions during
+    --- the in-progress hand are queued (while_idle=true) per submit_action.
     local buy_in = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     local ok, err = c.tbl:seat_player({
       seat = seat,
@@ -904,9 +1019,7 @@ local function run_http()
       end
     end
     c.tbl:leave_seat(seat)
-    if c.action_queue then
-      c.action_queue[player_id] = nil
-    end
+    clear_player_action_state(c, player_id)
     remove_player_token(c, player_id)
     return {
       ok = true,
@@ -948,20 +1061,87 @@ local function run_http()
       }
     end
     local pid_str = tostring(player_id)
-    local auth_pid = resolve_auth_player(req, c)
-    if auth_pid and auth_pid ~= pid_str then
-      return { "403 Forbidden", api.error_body("forbidden", "Token does not match player_id.") }
+
+    --- Token enforcement on actions: the server issues a per-player token at
+    --- POST /join; without it any unauthenticated client could submit moves
+    --- as any seated player. If the player is currently seated we require the
+    --- header to match; if they are not seated yet we still let the request
+    --- through (it'll fail with not_seated below) so spoofing a missing
+    --- player can't be silently turned into a permission error.
+    local raw_token = req.headers and req.headers["x-player-token"]
+    local seated_seat = c.tbl:seat_for_player(pid_str)
+    if seated_seat then
+      if not raw_token or raw_token == "" then
+        return action_http_error("token_required")
+      end
+      local mapped = c.token_to_player and c.token_to_player[raw_token] or nil
+      if mapped ~= pid_str then
+        return action_http_error("token_invalid")
+      end
+    elseif raw_token and raw_token ~= "" then
+      local mapped = c.token_to_player and c.token_to_player[raw_token] or nil
+      if mapped and mapped ~= pid_str then
+        return action_http_error("token_invalid")
+      end
     end
 
-    local result, err = submit_action(c, pid_str, tostring(action), amount, q, s.strict_action_queue)
-    if not result then
-      return action_http_error(err)
+    local client_action_id = j.client_action_id
+    if client_action_id ~= nil and type(client_action_id) ~= "string" then
+      return {
+        "400 Bad Request",
+        api.error_body("bad_request", "client_action_id must be a string if provided."),
+      }
     end
-    return {
+    if type(client_action_id) == "string" and #client_action_id > 128 then
+      return {
+        "400 Bad Request",
+        api.error_body("bad_request", "client_action_id must be at most 128 characters."),
+      }
+    end
+
+    local expected_action_seq = j.expected_action_seq
+    if expected_action_seq ~= nil then
+      local n = tonumber(expected_action_seq)
+      if not n or n < 0 or n ~= math.floor(n) then
+        return {
+          "400 Bad Request",
+          api.error_body("bad_request", "expected_action_seq must be a non-negative integer if provided."),
+        }
+      end
+      expected_action_seq = math.floor(n)
+    end
+
+    local cached = lookup_idempotent(c, pid_str, client_action_id)
+    if cached then
+      return cached
+    end
+
+    local result, err, err_details = submit_action(
+      c,
+      pid_str,
+      tostring(action),
+      amount,
+      q,
+      s.strict_action_queue,
+      { expected_action_seq = expected_action_seq }
+    )
+    if not result then
+      return action_http_error(err, err_details)
+    end
+
+    --- A successful submission cancels any outstanding "your queued action
+    --- was dropped" notice for this player; they've effectively moved on.
+    if c.action_queue_drops then
+      c.action_queue_drops[pid_str] = nil
+    end
+
+    local body = {
       ok = true,
       queued = (result == "queued"),
-      table = filter_snapshot_for_player(table_snapshot(c), auth_pid or pid_str, c.tbl),
+      table = filter_snapshot_for_player(table_snapshot(c), pid_str, c.tbl),
     }
+    store_idempotent(c, pid_str, client_action_id, body)
+    return body
   end)
 
   srv:route("POST", "/v1/tables/:id/bot/start", function(req, params, s)
@@ -1457,7 +1637,7 @@ local function run_http()
       end
     end
     c.tbl:leave_seat(seat)
-    if c.action_queue then c.action_queue[player_id] = nil end
+    clear_player_action_state(c, player_id)
 
     if c.running_bots[player_id] then
       kill_bot(c.running_bots[player_id].pid)
@@ -1477,7 +1657,10 @@ local function run_http()
     if not c then return not_found_table end
 
     c.hand:_reset_between_hands()
+    c.hand.last_button_seat = nil
     c.action_queue = {}
+    c.action_queue_drops = {}
+    c.last_action_results = {}
 
     local default_chips = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     for i = 1, c.tbl.max_seats do

@@ -29,8 +29,10 @@ X-Player-Token: <token>
 
 - **State endpoint** — only your hole cards are returned when the header is present;
   without it, all hole cards are hidden.
-- **Action endpoint** — if the header is present, the server verifies the token
-  matches the `player_id` in the body (returns `403` on mismatch).
+- **Action endpoint** — the header is **required** for any seated player. Missing
+  header → `401 token_required`; token mapped to a different player → `403
+  token_invalid`. (Sending an action as an unseated player_id is still allowed
+  and will fail with `not_seated`.)
 
 ---
 
@@ -204,7 +206,7 @@ Submit a poker action.
 
 | Python client | `c.send_action("demo", player_id="Alice", action="raise", amount=20)` |
 |---|---|
-| Auth header | Optional — if present, must match `player_id` or `403` |
+| Auth header | **Required** for any seated player (`X-Player-Token`). Missing → `401 token_required`. Mismatched → `403 token_invalid`. |
 
 **Request body**
 
@@ -214,6 +216,8 @@ Submit a poker action.
 | `action` | string | yes | `fold`, `check`, `call`, `raise`, `bet`, `all_in` |
 | `amount` | integer | conditional | Required for `raise` and `bet` |
 | `queue` | boolean | no | `true` = always queue; `false` = error if not your turn; omit = auto-queue when not your turn |
+| `client_action_id` | string | no | Idempotency key, ≤ 128 chars. The server caches the response per `(player_id, id)` for 60 s; replay with the same id returns the cached response instead of re-applying. |
+| `expected_action_seq` | integer | no | Assert the client's view of `hand.action_seq`. Mismatch when the action would apply now → `stale_action` (409) with `details.current_seq`. Ignored when the action would be queued. |
 
 **Response**
 
@@ -226,7 +230,14 @@ Submit a poker action.
 ```
 
 `queued: true` means the action was stored and will execute when it becomes this
-player's turn.
+player's turn (or on the next hand for players who joined mid-hand, for whom the
+queue is always effectively `while_idle`).
+
+**Related snapshot field:** `table.action_queue_drops[player_id]` exposes queued
+intents the server discarded at fire time (`reason` = `stale_street` when the
+betting round changed before the queue could fire, or a game-engine error code
+like `min_raise` / `insufficient_chips`). Cleared by the player's next successful
+action submission.
 
 ---
 

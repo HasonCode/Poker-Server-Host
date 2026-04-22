@@ -10,7 +10,7 @@ function M.health()
   }
 end
 
-function M.table_state_snapshot(tbl, hand, action_queue)
+function M.table_state_snapshot(tbl, hand, action_queue, action_queue_drops)
   local seats_out = {}
   for i = 1, tbl.max_seats do
     local s = tbl:get_seat(i)
@@ -30,12 +30,28 @@ function M.table_state_snapshot(tbl, hand, action_queue)
     end
   end
 
+  local drops = {}
+  if type(action_queue_drops) == "table" then
+    for pid, ent in pairs(action_queue_drops) do
+      if type(ent) == "table" then
+        drops[pid] = {
+          action = ent.action,
+          amount = ent.amount,
+          street = ent.street,
+          reason = ent.reason,
+          at = ent.at,
+        }
+      end
+    end
+  end
+
   return {
     table_id = tbl.id,
     max_seats = tbl.max_seats,
     seats = seats_out,
     hand = hand and hand:snapshot_public() or nil,
     action_queue = q,
+    action_queue_drops = drops,
   }
 end
 

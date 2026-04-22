@@ -40,7 +40,24 @@ local function choose(tbl, hand, seat)
   return "fold", nil
 end
 
---- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table }
+--- Record a dropped queued action so the player can see what happened on
+--- their next snapshot. Bounded to one entry per player; consumers of the
+--- snapshot are expected to clear it after observing.
+local function record_drop(ctx, pid, qent, reason)
+  if not ctx then
+    return
+  end
+  ctx.action_queue_drops = ctx.action_queue_drops or {}
+  ctx.action_queue_drops[pid] = {
+    action = qent and qent.action,
+    amount = qent and qent.amount,
+    street = qent and qent.street,
+    reason = reason,
+    at = os.time(),
+  }
+end
+
+--- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table, action_queue_drops?: table }
 function M.run_until_human(ctx)
   local tbl = ctx.tbl
   local hand = ctx.hand
@@ -96,6 +113,7 @@ function M.run_until_human(ctx)
           and qent.street ~= hand.street
         if stale then
           queue[pid] = nil
+          record_drop(ctx, pid, qent, "stale_street")
           io.stderr:write(
             "[poker-server] Queued action dropped (betting round changed) for "
               .. tostring(pid)
@@ -105,6 +123,7 @@ function M.run_until_human(ctx)
           queue[pid] = nil
           local ok, err = hand:apply_action(tbl, pid, qent.action, qent.amount)
           if not ok then
+            record_drop(ctx, pid, qent, tostring(err))
             io.stderr:write(
               "[poker-server] Queued action discarded for "
                 .. tostring(pid)

@@ -308,20 +308,39 @@ class PokerClient:
         action: str,
         amount: Optional[int] = None,
         queue: Optional[bool] = None,
+        client_action_id: Optional[str] = None,
+        expected_action_seq: Optional[int] = None,
     ) -> Any:
         """
         Send a table action: fold, check, call, raise, bet, all_in.
         raise/bet require amount; all_in uses full stack.
 
-        If queue is True, only store the action for when it is legal (no-op start
-        while the hand is idle). If queue is False, wrong_turn is an error instead
-        of auto-queuing. If queue is omitted, not-your-turn submits are queued.
+        If *queue* is True, only store the action for when it is legal (no-op start
+        while the hand is idle). If *queue* is False, wrong_turn is an error instead
+        of auto-queuing. If *queue* is omitted, not-your-turn submits are queued.
+
+        *client_action_id* is an optional string the server uses for **idempotency**:
+        replaying the same id for this player returns the original response instead
+        of applying (or queuing) the action again. Use it on retries after a network
+        error so that a "fold" intended for hand N is never silently re-applied as
+        a queued move on hand N+1. Cached entries expire after 60 s.
+
+        *expected_action_seq* asserts that you are acting on a specific
+        ``hand.action_seq`` you saw in a recent snapshot. If the server's current
+        seq differs and the action would otherwise apply now, it is rejected with
+        ``stale_action`` (HTTP 409); the error ``details`` include
+        ``current_seq`` so you can refresh and retry. Ignored when the action
+        would be queued.
         """
         body: dict[str, Any] = {"player_id": player_id, "action": action}
         if amount is not None:
             body["amount"] = amount
         if queue is not None:
             body["queue"] = queue
+        if client_action_id is not None:
+            body["client_action_id"] = client_action_id
+        if expected_action_seq is not None:
+            body["expected_action_seq"] = expected_action_seq
         return self._request_json(
             "POST", self._path_table(table_id, "actions"), body
         )

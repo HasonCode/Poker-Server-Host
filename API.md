@@ -82,6 +82,8 @@ Common errors: **`seat_taken`** (409), **`table_full`** (409), **`invalid_seat`*
 
 ### POST `/v1/tables/{table_id}/actions`
 
+**Authentication:** the **`X-Player-Token`** header is **required** for any seated player. The token is returned by `POST /join`. Submitting without it (when the named `player_id` is seated) returns **`token_required`** (401); a token that does not map to `player_id` returns **`token_invalid`** (403). This closes a spoofing hole where an unauthenticated client could submit moves as another seated player.
+
 Body:
 
 ```json
@@ -98,7 +100,9 @@ Optional:
 {
   "player_id": "alice",
   "action": "fold",
-  "queue": true
+  "queue": true,
+  "client_action_id": "01J9Q...",
+  "expected_action_seq": 7
 }
 ```
 
@@ -106,6 +110,8 @@ Optional:
 - **`action`** — One of: `fold`, `check`, `call`, `raise`, `bet`, `all_in`
 - **`amount`** — For **`raise`** / **`bet`**: **total chips you commit on this betting street** after the action (not “chips added on top of call” only). Example: after blinds (SB=2, BB=5), a raise “to 15” means **`amount`: 15** total for that seat on that street.
 - **`all_in`** — No `amount`; entire stack goes in.
+- **`client_action_id`** — Optional string (≤ 128 chars). Idempotency key. The server caches the response per (player, id) for 60 s; replaying with the same id returns the original response instead of re-applying or re-queuing the action. Use it on network retries so a "fold" intended for hand N is never silently re-applied as a queued move on hand N+1.
+- **`expected_action_seq`** — Optional non-negative integer. Asserts that you are acting on the `hand.action_seq` you observed in a recent snapshot. If the server's current seq differs and the action would otherwise apply now, it is rejected with **`stale_action`** (409) and the error `details` include `current_seq` and `expected_seq`. Ignored when the action would be queued.
 - **`queue`** — Optional boolean. Controls **action queue** (precache) behavior:
   - **`queue: true`** — Store this action only: do **not** start a hand while **`hand.status` is `idle`**, and do **not** apply when it is not your turn. If it **is** your turn on an active hand, the action is applied immediately (same as a normal submit).
   - **`queue: false`** — If it is **not** your turn on an active hand, the server returns **`wrong_turn`** instead of storing.
@@ -117,7 +123,9 @@ Optional:
 
 **Turn order:** Only the player in **`hand.action_to_seat`** may act **immediately** without using the queue. If the hand is **`idle`**, the first valid **non-queue-only** action from the **first player to act** preflop **starts** a new hand (posts blinds, sets positions). If you are **not** first to act and the hand is idle, your request is **queued** (unless you used **`queue: false`**, which only applies to **wrong_turn** on an **active** hand).
 
-**Snapshot:** `GET .../state` includes **`action_queue`**: a map of **`player_id`** → `{ "action", "amount" }` for queued intents (empty when none).
+**Snapshot:** `GET .../state` includes **`action_queue`** (map of `player_id` → `{ "action", "amount" }` for queued intents) and **`action_queue_drops`** (map of `player_id` → `{ "action", "amount", "street", "reason", "at" }` for queued intents the server discarded at fire time, e.g. because the betting round changed (`reason: "stale_street"`) or the action became illegal). A player's drop entry is cleared by their next successful action submission.
+
+**Mid-hand join:** Joining via `POST /join` while a hand is **active** is allowed; the new seat is dealt in at the **next** `start_hand`. While the hand they joined into is still running, any actions they submit are **queued for the next deal** (`while_idle = true`) — `queue: false` returns `wrong_turn`, `queue: true`/omitted is stored.
 
 **Blinds & positions (defaults):** Small blind **2** chips, big blind **5** chips. The snapshot includes **`button_seat`**, **`sb_seat`**, **`bb_seat`**, **`sb_amount`**, **`bb_amount`**. Heads-up: the button posts the small blind and acts first preflop. With 3+ players, first preflop actor is UTG (seat after the big blind).
 
@@ -139,7 +147,7 @@ Optional:
 
 - **`queued`** — `true` if this request only stored an action for later.
 
-Common errors: **`wrong_turn`** (when `queue: false` and not your turn), **`not_seated`**, **`min_raise`**, **`cannot_raise_self`**, **`cannot_check`**, **`need_two_players`**, plus the generic validation codes above.
+Common errors: **`wrong_turn`** (when `queue: false` and not your turn), **`not_seated`**, **`min_raise`**, **`cannot_raise_self`**, **`cannot_check`**, **`need_two_players`**, **`stale_action`** (when `expected_action_seq` doesn't match), **`token_required`** / **`token_invalid`**, plus the generic validation codes above.
 
 ## Python client
 

@@ -237,7 +237,16 @@ function M:wait_for_turn(table_id, player_id, opts)
   end
 end
 
---- @param args { player_id: string, action: string, amount?: number, queue?: boolean }
+--- @param args { player_id: string, action: string, amount?: number, queue?: boolean, client_action_id?: string, expected_action_seq?: number }
+---
+--- `client_action_id` is an optional string the server uses for idempotency:
+--- replaying the same id for this player returns the cached response instead
+--- of re-applying or re-queuing the action. Use it on retries after a network
+--- error.
+---
+--- `expected_action_seq` asserts that you are acting on a specific
+--- `hand.action_seq` you saw in a recent snapshot; mismatch yields
+--- `stale_action` (HTTP 409) and is ignored when the action would be queued.
 function M:send_action(table_id, args)
   local body = {
     player_id = args.player_id,
@@ -248,6 +257,12 @@ function M:send_action(table_id, args)
   end
   if args.queue ~= nil then
     body.queue = args.queue
+  end
+  if args.client_action_id ~= nil then
+    body.client_action_id = args.client_action_id
+  end
+  if args.expected_action_seq ~= nil then
+    body.expected_action_seq = args.expected_action_seq
   end
   return self:_request("POST", path_table(table_id, "actions"), body)
 end

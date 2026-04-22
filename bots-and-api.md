@@ -30,9 +30,18 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 | `GET` | `/v1/tables/:id/my-turn` | Whether it is **your** turn: requires `X-Player-Token`; response `{ "ok": true, "player_id": "...", "is_my_turn": true|false }` |
 | `POST` | `/v1/tables/:id/join` | Take a seat; response includes `token` and `table` |
 | `POST` | `/v1/tables/:id/leave` | Leave (`player_id` in JSON) |
-| `POST` | `/v1/tables/:id/actions` | Submit an action (`player_id`, `action`, optional `amount`, optional `queue`) |
+| `POST` | `/v1/tables/:id/actions` | Submit an action (`player_id`, `action`, optional `amount`, optional `queue`, optional `client_action_id`, optional `expected_action_seq`). **Requires** `X-Player-Token` for any seated player. |
 
 **Actions:** `fold`, `check`, `call`, `raise`, `bet`, `all_in`. For `raise` / `bet`, **`amount`** is your **total contribution this street** (not just the increment).
+
+**Hardening fields on `POST /actions`:**
+
+- **`client_action_id`** (string, ≤ 128 chars) — idempotency key. The server caches the response per `(player_id, id)` for 60 s; replaying with the same id returns the cached response instead of re-applying or re-queuing. **Always send one on retries** so a "fold" intended for hand N cannot silently become a queued action on hand N+1.
+- **`expected_action_seq`** (non-negative integer) — assert the `hand.action_seq` you saw in the snapshot you based this decision on. If the server's current seq differs and the action would apply now, it is rejected with **`stale_action`** (HTTP 409) whose `error.details.current_seq` tells you how far ahead the table has moved. Ignored when the action would be queued.
+
+**Related snapshot field:** `table.action_queue_drops[player_id]` surfaces any queued intent the server discarded at fire time (e.g. the betting round advanced before it fired → `reason: "stale_street"`, or the action became illegal → `reason` equals a game-engine code like `min_raise`). A drop entry for you is cleared by your next successful action submission.
+
+**Mid-hand join:** You can now `POST /join` while a hand is active. You take the seat immediately and are dealt in at the **next** `start_hand`. While the in-progress hand continues, any `/actions` you submit are queued for the next deal (effectively `while_idle = true`); `queue: false` returns `wrong_turn` until you are in an actual hand.
 
 ---
 
@@ -373,10 +382,12 @@ See `src/poker/bot_runner.lua` and `bots/example_bot.lua`. Run with Lua on your 
 
 ## Common pitfalls
 
-1. **403 `Token does not match player_id`** — Every `PokerClient` instance is tied to **one** `player_id` from `join`. Send actions only with the client that joined as that player.
+1. **401 `token_required` / 403 `token_invalid`** — `POST /actions` now requires `X-Player-Token` for any seated player, and the token must map to `player_id`. Every `PokerClient` instance is tied to **one** `player_id` from `join`.
 2. **Wrong `amount` on raises** — Must be **total** chips committed on **this street**, not “add this many chips”.
 3. **HTTPS** — Use `https://` for production; avoid mixed content if the bot runs in a browser context.
 4. **Table list** — Hidden tables (e.g. some LLM-only ids) may not appear on `GET /v1/tables`; you can still use `GET /v1/tables/:id/state` if routing allows.
+5. **Network retries without `client_action_id`** — Resubmitting the same `POST /actions` after a transport error can apply/queue it twice. Always include a fresh `client_action_id` per logical decision and reuse it across retries of that decision.
+6. **Acting on stale state** — Between your `GET /state` and your `POST /actions`, another request (or a timeout firing during someone else's `GET /state`) can advance the hand. Pass `expected_action_seq = hand.action_seq` to have the server reject out-of-date submissions with `stale_action` (409) rather than folding / checking in the wrong spot.
 
 ---
 

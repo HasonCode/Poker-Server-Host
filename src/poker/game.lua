@@ -37,7 +37,10 @@ function HandState.new(opts)
     button_seat = nil,
     sb_seat = nil,
     bb_seat = nil,
-    dealer_ring_index = 0,
+    --- Stable seat the button was on at the end of the previous hand, used
+    --- to compute the next button regardless of who has joined or left in
+    --- the meantime. nil before the first hand.
+    last_button_seat = nil,
     contribution = {},
     current_bet = 0,
     min_raise_increment = 0,
@@ -129,6 +132,24 @@ local function next_in_ring(ring, seat)
     return nil
   end
   return ring[(idx % #ring) + 1]
+end
+
+--- Next occupied seat strictly after `last_seat` (clockwise, by seat number).
+--- Works even when `last_seat` itself is no longer in `ring` (e.g. the
+--- previous button left between hands).
+local function next_seat_after(ring, last_seat)
+  if not ring or #ring == 0 then
+    return nil
+  end
+  if not last_seat then
+    return ring[1]
+  end
+  for _, s in ipairs(ring) do
+    if s > last_seat then
+      return s
+    end
+  end
+  return ring[1]
 end
 
 function HandState:_reset_street_betting()
@@ -317,8 +338,11 @@ end
 
 function HandState:_finish_hand(tbl)
   self.action_to_seat = nil
-  local n = math.max(1, #self.occupied_ring)
-  self.dealer_ring_index = (self.dealer_ring_index + 1) % n
+  --- Remember the seat (not a ring offset) so the next hand's button advances
+  --- correctly even if players join or leave between hands.
+  if self.button_seat then
+    self.last_button_seat = self.button_seat
+  end
 end
 
 function HandState:_advance_street_or_complete(tbl)
@@ -358,6 +382,28 @@ function HandState:_advance_street_or_complete(tbl)
   end
 end
 
+--- Compute (button, sb, bb, first_actor) for the given occupied ring,
+--- using `last_button_seat` to advance the button by absolute seat number
+--- (so leaves/joins between hands don't shift the button arbitrarily).
+function HandState:_compute_positions(occ)
+  local n = #occ
+  if n < 2 then
+    return nil
+  end
+  local btn = next_seat_after(occ, self.last_button_seat)
+  local sb, bb, first
+  if n == 2 then
+    sb = btn
+    bb = next_seat_after(occ, btn)
+    first = sb
+  else
+    sb = next_seat_after(occ, btn)
+    bb = next_seat_after(occ, sb)
+    first = next_seat_after(occ, bb)
+  end
+  return { button = btn, sb = sb, bb = bb, first = first }
+end
+
 --- Who would act first preflop after posting blinds, without mutating state.
 --- Returns seat number or nil, err (need_two_players, insufficient_chips).
 function HandState:peek_first_actor(tbl)
@@ -366,34 +412,30 @@ function HandState:peek_first_actor(tbl)
     return nil, "need_two_players"
   end
 
-  local n = #occ
-  local b = self.dealer_ring_index % n
-  local sb, bb
-  if n == 2 then
-    sb = occ[(b % 2) + 1]
-    bb = occ[((b + 1) % 2) + 1]
-  else
-    sb = occ[(b + 1) % n + 1]
-    bb = occ[(b + 2) % n + 1]
+  local pos = self:_compute_positions(occ)
+  if not pos then
+    return nil, "need_two_players"
   end
 
   local function can_post(seat, amt)
     local st = tbl:get_seat(seat)
     return st and st.stack >= amt
   end
-  if not can_post(sb, self.sb_amount) or not can_post(bb, self.bb_amount) then
+  if not can_post(pos.sb, self.sb_amount) or not can_post(pos.bb, self.bb_amount) then
     return nil, "insufficient_chips"
   end
 
-  if n == 2 then
-    return sb
-  end
-  return occ[(b + 3) % n + 1]
+  return pos.first
 end
 
 function HandState:start_hand(tbl)
   local occ = occupied_seats(tbl)
   if #occ < 2 then
+    return nil, "need_two_players"
+  end
+
+  local pos = self:_compute_positions(occ)
+  if not pos then
     return nil, "need_two_players"
   end
 
@@ -408,22 +450,9 @@ function HandState:start_hand(tbl)
   self.street = "preflop"
   self.last_winners = nil
 
-  local n = #occ
-  local b = self.dealer_ring_index % n
-  local btn = occ[b + 1]
-  local sb, bb
-
-  if n == 2 then
-    sb = occ[(b % 2) + 1]
-    bb = occ[((b + 1) % 2) + 1]
-  else
-    sb = occ[(b + 1) % n + 1]
-    bb = occ[(b + 2) % n + 1]
-  end
-
-  self.button_seat = btn
-  self.sb_seat = sb
-  self.bb_seat = bb
+  self.button_seat = pos.button
+  self.sb_seat = pos.sb
+  self.bb_seat = pos.bb
 
   local function post(seat, amt)
     local st = tbl:get_seat(seat)
@@ -437,11 +466,11 @@ function HandState:start_hand(tbl)
     return true
   end
 
-  local ok, err = post(sb, self.sb_amount)
+  local ok, err = post(pos.sb, self.sb_amount)
   if not ok then
     return nil, err
   end
-  ok, err = post(bb, self.bb_amount)
+  ok, err = post(pos.bb, self.bb_amount)
   if not ok then
     return nil, err
   end
@@ -457,13 +486,23 @@ function HandState:start_hand(tbl)
     self.hole_cards[s] = deck_mod.draw(self.deck, 2)
   end
 
-  if n == 2 then
-    self.action_to_seat = sb
-  else
-    self.action_to_seat = occ[(b + 3) % n + 1]
-  end
+  self.action_to_seat = pos.first
 
   return true
+end
+
+--- True iff `seat` is participating in the currently-active hand. Returns
+--- false during idle, and false for players who joined after start_hand().
+function HandState:is_seat_in_hand(seat)
+  if self.status ~= "active" or not seat then
+    return false
+  end
+  for _, s in ipairs(self.occupied_ring or {}) do
+    if s == seat then
+      return true
+    end
+  end
+  return false
 end
 
 function HandState:_log(player_id, seat, action, amount)
