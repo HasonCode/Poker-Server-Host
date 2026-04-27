@@ -96,11 +96,18 @@ local function create_table_context(id, max_seats, opts)
   if action_timeout_mode ~= "eject" and action_timeout_mode ~= "fold_only" then
     action_timeout_mode = "eject"
   end
+  --- Default grace window between "everyone ready" and "deal the hand".
+  --- Bumped from 2s to 8s because the original window was easy to race:
+  --- if the first 2 players to join readied quickly, slow joiners P3/P4
+  --- could fall through after the gate had already released. Eight
+  --- seconds gives interactive UIs a comfortable buffer; bots and tests
+  --- can still tighten via `start_grace_sec` per-table or the env
+  --- POKER_START_GRACE_SEC.
   local start_grace_sec = opts.start_grace_sec
   if start_grace_sec == nil then
-    start_grace_sec = tonumber(os.getenv("POKER_START_GRACE_SEC")) or 2
+    start_grace_sec = tonumber(os.getenv("POKER_START_GRACE_SEC")) or 8
   end
-  start_grace_sec = tonumber(start_grace_sec) or 2
+  start_grace_sec = tonumber(start_grace_sec) or 8
   if start_grace_sec < 0 then
     start_grace_sec = 0
   end
@@ -222,15 +229,18 @@ local function clear_player_action_state(ctx, player_id)
   end
 end
 
---- True while the cohort is in the pre-game lobby phase: `wait_for_ready`
---- is on, the first hand has not started, and joins should be routed to
---- `ctx.pending_seats` rather than `tbl:seat_player`. While this returns
---- true no chips are deducted, no button/SB/BB position is assigned, and
---- no cards are dealt for any joiner.
+--- True whenever the table is configured to require explicit `/ready`
+--- before dealing. While this returns true every new joiner is routed
+--- into `ctx.pending_seats` instead of `tbl:seat_player`; they pay no
+--- blinds, are not assigned positions, and get no cards until they POST
+--- `/ready` (and the gate releases). This used to be limited to the
+--- "first hand of a cohort" but the user reported that mid-hand joiners
+--- could slip past the gate -- now the lobby applies continuously, so
+--- *every* joiner must ready up before sitting down. AI players (which
+--- the server seats up front via `with_ais`) are implicitly ready and
+--- never enter the lobby.
 local function lobby_active(ctx)
-  return ctx
-    and ctx.wait_for_ready == true
-    and not ctx.first_hand_started
+  return ctx and ctx.wait_for_ready == true
 end
 
 --- 1-based index of `pid` in `ctx.pending_seats`, or nil if absent.
@@ -322,9 +332,13 @@ local function eject_lobby_or_seat(ctx, pid)
   return true
 end
 
---- Eject every non-AI participant (lobby or seated) who has not signalled
---- ready. Called immediately before `release_lobby_to_table` so the hand
---- is dealt only to players who confirmed. Returns the number ejected.
+--- Eject every non-AI lobby member who has not signalled ready. Called
+--- immediately before `release_lobby_to_table` so the next hand is dealt
+--- only to confirmed players. Already-seated players are *not* iterated
+--- here -- under the continuous-lobby model, seated players are
+--- implicitly part of the game (they've been through a prior lobby) and
+--- only leave via `/leave`, admin kick, the action timeout, or busting
+--- out. Returns the number ejected.
 local function eject_unready_pre_start(ctx)
   if not ctx or ctx.wait_for_ready ~= true then
     return 0
@@ -339,15 +353,6 @@ local function eject_unready_pre_start(ctx)
       local pid = entry.player_id
       if pid and not readied[pid] and not ai_players[pid] then
         victims[#victims + 1] = pid
-      end
-    end
-  end
-  local tbl = ctx.tbl
-  if tbl then
-    for i = 1, tbl.max_seats do
-      local s = tbl:get_seat(i)
-      if s and s.player_id and not readied[s.player_id] and not ai_players[s.player_id] then
-        victims[#victims + 1] = s.player_id
       end
     end
   end
@@ -466,6 +471,12 @@ local function release_lobby_to_table(ctx)
       })
       if ok then
         seated = seated + 1
+        --- Drop the per-cohort ready flag now that this player is in.
+        --- Future cohorts (e.g. they leave and rejoin via lobby) will
+        --- have to re-ready, which is the correct semantics.
+        if ctx.ready_players then
+          ctx.ready_players[entry.player_id] = nil
+        end
         io.stderr:write(
           "[table:" .. tostring(tbl.id) .. "] Lobby release seated "
             .. tostring(entry.player_id) .. " at seat " .. tostring(seat) .. "\n"
@@ -479,12 +490,27 @@ local function release_lobby_to_table(ctx)
   if seated > 0 then
     ctx._last_join_at = os.clock()
   end
+  --- If the lobby is fully cleared (everyone got a seat or was ejected)
+  --- reset the start-timeout so the *next* lobby cohort gets a fresh
+  --- window. Stragglers (who couldn't be seated because the table is
+  --- full) keep the existing timer ticking.
+  if not ctx.pending_seats or #ctx.pending_seats == 0 then
+    ctx._first_ready_at = nil
+  end
   return seated
 end
 
---- Tally seated players + lobby players and how many of them have readied
---- this cohort. A single helper keeps the gate and the snapshot in
---- lock-step.
+--- Classify everyone who is currently part of the table cohort -- both
+--- those already seated and those still in the pre-game lobby -- into
+--- "ready" (or AI, which is implicit) vs "waiting" buckets. A single
+--- helper keeps `ready_gate_blocks_start`, `ready_status_snapshot`, and
+--- the eject path in lock-step. Notes:
+---   * Already-seated players (humans who've been through the lobby in
+---     a previous cohort) do *not* need to re-ready every hand. They are
+---     reported in `ready` so the snapshot/gate sees them as
+---     participants who can already play.
+---   * Pending-seat (lobby) entries are gated: an unready lobby joiner
+---     blocks the next hand from dealing.
 local function tally_ready(ctx)
   local tbl = ctx and ctx.tbl
   local seated = {}
@@ -500,28 +526,20 @@ local function tally_ready(ctx)
       local pid = s.player_id
       seen[pid] = true
       seated[#seated + 1] = pid
-      --- AI players have no client to POST `/ready`, so we treat them as
-      --- implicitly ready. Without this an `with_ais` table that flips on
-      --- `wait_for_ready` would never start (the AIs would sit in
-      --- waiting_players forever).
-      local is_ai = ctx.ai_players and ctx.ai_players[pid]
-      if (ctx.ready_players and ctx.ready_players[pid]) or is_ai then
-        ready[#ready + 1] = pid
-      else
-        waiting[#waiting + 1] = pid
-      end
+      --- Seated players are considered ready by virtue of being seated.
+      --- They've already been through the lobby (or were seated as AI by
+      --- `with_ais`). Re-readying every hand would be hostile UX.
+      ready[#ready + 1] = pid
     end
   end
-  --- Lobby (pre-game) players count toward the gate too: the cohort cannot
-  --- start until everyone in the lobby has readied, otherwise we'd shuffle
-  --- and seat half the room while the rest is mid-handshake.
   if ctx.pending_seats then
     for _, entry in ipairs(ctx.pending_seats) do
       local pid = entry.player_id
       if not seen[pid] then
         seen[pid] = true
         seated[#seated + 1] = pid
-        if ctx.ready_players and ctx.ready_players[pid] then
+        local is_ai = ctx.ai_players and ctx.ai_players[pid]
+        if (ctx.ready_players and ctx.ready_players[pid]) or is_ai then
           ready[#ready + 1] = pid
         else
           waiting[#waiting + 1] = pid
@@ -532,21 +550,29 @@ local function tally_ready(ctx)
   return seated, ready, waiting
 end
 
---- True iff the first hand of the current cohort is still blocked because
---- not every player (seated + lobby) has signalled ready. Returns false
---- once the first hand has started (the gate is only enforced before hand
---- #1) or once the start-timeout (= action_timeout_sec measured from the
---- first ready signal) has elapsed and at least two players have readied.
---- While the gate is active, joined players sit in the pre-game lobby:
---- no chips are deducted, no positions are assigned, and no cards are
---- dealt. When the gate finally releases, `release_lobby_to_table` will
---- *eject* anyone still un-ready and shuffle the rest into random seats
---- before `start_hand` runs.
+--- True iff the next hand should be held back because some lobby player
+--- has not yet signalled ready. Applies *continuously* while
+--- `wait_for_ready` is on -- not just before the very first hand. The
+--- semantics:
+---   * If a hand is currently active, the gate is irrelevant (a hand in
+---     progress finishes regardless).
+---   * If the lobby is empty and ≥ 2 players are seated, no gate -- play
+---     proceeds normally between hands. New joiners during a hand land
+---     in the lobby for the *next* hand.
+---   * If the lobby has un-ready non-AI members, block until either
+---     everyone readies or the start-timeout (= action_timeout_sec from
+---     the first ready) elapses and at least two participants are ready.
+---   * On release, `release_lobby_to_table` ejects un-ready non-AI
+---     lobby members and shuffles the rest into random free seats.
+--- The "first hand of a cohort" is now just a special case of this rule
+--- -- it's the hand where the entire table is in the lobby.
 local function ready_gate_blocks_start(ctx)
   if not ctx or ctx.wait_for_ready ~= true then
     return false
   end
-  if ctx.first_hand_started then
+  --- Hand in progress: gate doesn't apply to active hands. New lobby
+  --- joiners simply wait for the next idle transition.
+  if ctx.hand and ctx.hand.status == "active" then
     return false
   end
   local tbl = ctx.tbl
@@ -554,25 +580,71 @@ local function ready_gate_blocks_start(ctx)
     return false
   end
 
-  local seated, ready_list = tally_ready(ctx)
-  local seated_total = #seated
-  local ready_count = #ready_list
+  --- Inspect the lobby roster and the seated cohort.
+  local seated_count = tbl:occupied_count()
+  local readied = ctx.ready_players or {}
+  local ai_p = ctx.ai_players or {}
+  local ready_lobby = 0
+  local unready_lobby = 0
+  if ctx.pending_seats then
+    for _, e in ipairs(ctx.pending_seats) do
+      local pid = e.player_id
+      if readied[pid] or ai_p[pid] then
+        ready_lobby = ready_lobby + 1
+      else
+        unready_lobby = unready_lobby + 1
+      end
+    end
+  end
+  --- After release, who would actually be at the felt: existing seats
+  --- plus the lobby members who readied (un-ready ones get ejected).
+  local total_after_release = seated_count + ready_lobby
 
-  --- Need at least two seated players to ever start. A lone seated player
-  --- waits indefinitely -- regardless of ready state -- because poker needs
-  --- two non-folded participants for a hand.
-  if seated_total < 2 then
+  if unready_lobby > 0 then
+    --- Lobby has at least one player who hasn't readied. Block by
+    --- default; the only escape is the start-timeout. Note that we
+    --- count *seated_count + ready_lobby* (i.e. the post-release total)
+    --- toward the "≥ 2 ready" requirement so an established 4-handed
+    --- table doesn't deadlock just because a 5th joiner is mid-handshake.
+    if ctx._first_ready_at then
+      local timeout = tonumber(ctx.action_timeout_sec) or 0
+      if timeout > 0 and total_after_release >= 2 then
+        local elapsed = os.clock() - ctx._first_ready_at
+        if elapsed >= timeout then
+          --- Even on timeout, respect any in-flight joins/grace so we
+          --- don't race against a player who is mid-handshake. They get
+          --- no extension once the timer is up, but the snapshot batch
+          --- settles before we eject.
+          if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
+            return true
+          end
+          return false
+        end
+      end
+    end
     return true
   end
 
-  if ready_count == seated_total then
-    --- Everyone seated has confirmed ready. Honour any pending-join settle
-    --- (so a still-being-seated player isn't skipped) and the small
-    --- "start grace" window so back-to-back joins/readies converge before
-    --- we deal hand #1.
-    if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
-      return true
-    end
+  --- All lobby members are ready (or the lobby is empty).
+  if total_after_release < 2 then
+    --- Not enough participants to deal yet. Block until at least two
+    --- ready/seated players are present.
+    return true
+  end
+
+  --- Honour any pending join settle so a still-being-seated joiner
+  --- isn't raced past the gate.
+  if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
+    return true
+  end
+
+  --- Apply the start-grace window so back-to-back joins/readies converge
+  --- before we deal. Reset by every join AND every ready in
+  --- `try_join_seat` / `handle_ready_signal`. Only relevant when the
+  --- lobby has at least one member; an empty-lobby + seated cohort
+  --- between hands shouldn't be paused.
+  local lobby_count = ready_lobby + unready_lobby
+  if lobby_count > 0 then
     local grace = tonumber(ctx.start_grace_sec) or 0
     if grace > 0 then
       local last_change = math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)
@@ -580,32 +652,8 @@ local function ready_gate_blocks_start(ctx)
         return true
       end
     end
-    return false
   end
-
-  --- Some players still haven't readied. Block by default; the only way
-  --- to start without unanimous readies is the start-timeout: once the
-  --- action_timeout_sec window since the first ready has elapsed and at
-  --- least two players have readied, force-start the hand. Players who
-  --- never readied are *ejected* from the table before the hand starts
-  --- (see `release_lobby_to_table` -> `eject_unready_pre_start`).
-  if ctx._first_ready_at then
-    local timeout = tonumber(ctx.action_timeout_sec) or 0
-    if timeout > 0 and ready_count >= 2 then
-      local elapsed = os.clock() - ctx._first_ready_at
-      if elapsed >= timeout then
-        --- Even on timeout, respect any in-flight joins/grace so we don't
-        --- race against a player who is mid-handshake. They won't get an
-        --- extension once the timer is up, but the snapshot batch settles.
-        if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
-          return true
-        end
-        return false
-      end
-    end
-  end
-
-  return true
+  return false
 end
 
 local function ready_status_snapshot(ctx)
@@ -616,13 +664,10 @@ local function ready_status_snapshot(ctx)
   --- Compute the time remaining on the start-timeout (if active). When
   --- nil, no timer is running yet (no readies received) or it has already
   --- elapsed; UI clients can use this to render a countdown until any
-  --- still-un-ready player is ejected and the hand begins.
+  --- still-un-ready player is ejected and the next hand begins.
   local timeout = tonumber(ctx.action_timeout_sec) or 0
   local remaining_sec = nil
-  if ctx.wait_for_ready == true
-      and not ctx.first_hand_started
-      and ctx._first_ready_at
-      and timeout > 0 then
+  if ctx.wait_for_ready == true and ctx._first_ready_at and timeout > 0 then
     local r = timeout - (os.clock() - ctx._first_ready_at)
     if r < 0 then r = 0 end
     remaining_sec = math.floor(r + 0.5)
@@ -652,28 +697,34 @@ local function ready_status_snapshot(ctx)
     wait_for_ready = ctx.wait_for_ready == true,
     require_start_flags = ctx.wait_for_ready == true,
     first_hand_started = ctx.first_hand_started == true,
-    in_lobby_phase = lobby_active(ctx) == true,
+    --- Cosmetic for clients: true while at least one lobby member exists
+    --- and the table requires ready signals. With the continuous-lobby
+    --- model this can flip back to true between hands when a new player
+    --- joins; it's no longer a one-shot "before the first hand" flag.
+    in_lobby_phase = lobby_active(ctx) == true and #lobby > 0,
     pending_join_count = ctx.pending_join_count or 0,
     start_grace_sec = ctx.start_grace_sec or 0,
     ready_players = ready_list,
     waiting_players = waiting_list,
-    --- Players who are not yet at a seat. They are tracked separately so
-    --- UIs can render a "waiting room" panel distinct from the felt.
+    --- Players who are not yet at a seat. UIs render this as a separate
+    --- "waiting room" panel distinct from the felt.
     lobby_players = lobby,
-    --- True when every player (seated + lobby) has voluntarily readied (no
-    --- timeout needed). Pending joins and grace still apply.
+    --- True when every player (seated + lobby) is ready and the table
+    --- has at least two participants. Pending joins and grace still
+    --- apply -- the gate may still be blocking briefly even when this
+    --- is true.
     all_ready = ctx.wait_for_ready == true
-      and (not ctx.first_hand_started)
       and (not pending_block)
       and (not grace_block)
       and (#waiting_list == 0)
       and (#seated >= 2),
     --- Start-timeout fields. start_timeout_sec is the maximum window
-    --- (= action_timeout_sec) and start_timeout_remaining_sec ticks down
-    --- once the first /ready arrives. When it hits zero, anyone still in
-    --- waiting_players is *ejected* from the table (drops their token,
-    --- bot, and lobby/seat slot) and the hand starts with the remaining
-    --- ready cohort, provided at least two players are ready.
+    --- (= action_timeout_sec) and start_timeout_remaining_sec ticks
+    --- down once the first /ready of the current lobby cohort arrives.
+    --- When it hits zero, anyone still in waiting_players is *ejected*
+    --- (drops their token, bot, and lobby/seat slot) and the next hand
+    --- starts with the remaining ready cohort, provided at least two
+    --- participants are ready.
     start_timeout_sec = (ctx.wait_for_ready == true) and timeout or 0,
     start_timeout_remaining_sec = remaining_sec,
     first_ready_received = ctx._first_ready_at ~= nil,
@@ -966,15 +1017,17 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
 
   if hand.status == "idle" then
     --- Release the pre-game cohort before starting a hand. This ejects
-    --- any non-ready non-AI participants (lobby or seat) and shuffles
-    --- the surviving lobby into random seats so `start_hand` deals only
-    --- to confirmed players. For non-`wait_for_ready` tables this is a
-    --- no-op. `ready_gate_blocks_start` has already returned false to
-    --- reach here.
-    if ctx.wait_for_ready == true and not ctx.first_hand_started then
+    --- any non-ready non-AI lobby members and shuffles the surviving
+    --- lobby into random free seats so `start_hand` deals only to
+    --- confirmed players. Runs on every idle->next-hand transition so
+    --- mid-hand joiners also get gated. For non-`wait_for_ready` tables
+    --- this is a no-op. `ready_gate_blocks_start` has already returned
+    --- false to reach here.
+    if ctx.wait_for_ready == true then
       release_lobby_to_table(ctx)
       --- Caller might have just been ejected by release_lobby_to_table
-      --- (e.g. a still-seated unready human got purged). Re-check seat.
+      --- (e.g. an unready non-AI player still on the seat got purged).
+      --- Re-check seat.
       seat = tbl:seat_for_player(player_id)
       if not seat then
         return nil, "not_seated"
@@ -1178,13 +1231,16 @@ local function table_snapshot(ctx)
   check_action_timeout(ctx)
   rearm_start_gate_if_empty(ctx)
   if not ready_gate_blocks_start(ctx) then
-    --- Pre-game lobby release. With `wait_for_ready` on, joins are queued
-    --- in `pending_seats` until the gate opens; the moment it does we
-    --- (a) eject anyone who never readied (start-timeout fired) and (b)
-    --- shuffle the surviving lobby into random seats so `start_hand`
-    --- (run inside `ai.run_until_human`) deals only to confirmed
-    --- players. For non-`wait_for_ready` tables this is a no-op.
-    if ctx.wait_for_ready == true and not ctx.first_hand_started then
+    --- Pre-game lobby release. With `wait_for_ready` on, every joiner
+    --- is queued in `pending_seats` until the gate opens; the moment it
+    --- does we (a) eject anyone who never readied (start-timeout fired)
+    --- and (b) shuffle the surviving lobby into random free seats so
+    --- `start_hand` (run inside `ai.run_until_human`) deals only to
+    --- confirmed players. We run this on *every* idle->next-hand
+    --- transition (not just the first hand) so mid-hand joiners also
+    --- have to ready before they get dealt in. For non-`wait_for_ready`
+    --- tables this is a no-op.
+    if ctx.wait_for_ready == true and ctx.hand.status == "idle" then
       release_lobby_to_table(ctx)
     end
     ai.run_until_human(ctx)
@@ -1286,15 +1342,17 @@ local function run_http()
 
     local buy_in = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
 
-    --- Pre-game lobby: when `wait_for_ready` is on and the cohort's first
-    --- hand has not been dealt, joins are queued in `pending_seats` rather
-    --- than placed at a specific seat. Chips are not deducted, no
-    --- button/SB/BB position is assigned, and no cards are dealt. The
-    --- shuffle and actual `seat_player` happens in `release_lobby_to_table`
-    --- once every lobby member has POSTed `/ready` (or the start-timeout
-    --- fires with at least 2 ready, ejecting the rest). The optional
-    --- `seat` field on the request is ignored in lobby mode -- placements
-    --- are random by design.
+    --- Pre-game lobby: when `wait_for_ready` is on, *every* join lands
+    --- in `pending_seats` rather than being placed at a specific seat
+    --- -- this applies before the first hand and continuously between
+    --- later hands too, so a mid-game joiner is gated like any other
+    --- new player. Chips are not deducted, no button/SB/BB position is
+    --- assigned, and no cards are dealt. The shuffle and actual
+    --- `seat_player` happens in `release_lobby_to_table` once every
+    --- lobby member has POSTed `/ready` (or the start-timeout fires
+    --- with at least 2 ready, ejecting the un-ready rest). The optional
+    --- `seat` field on the request is ignored in lobby mode --
+    --- placements are random by design.
     if lobby_active(c) then
       if c.tbl:occupied_count() + #c.pending_seats >= c.tbl.max_seats then
         return "defer"
@@ -1724,12 +1782,13 @@ local function run_http()
     if ready_flag then
       c.ready_players[player_id] = true
       --- Start the start-timeout countdown on the very first ready signal
-      --- of this cohort. Subsequent readies do not reset it; if a join
-      --- arrives after the timer started the new player still gets the
-      --- remaining window to ready up before they are ejected. The timer
-      --- is cleared when the hand finally starts, when the table empties,
-      --- or when the last ready is rescinded.
-      if not c._first_ready_at and not c.first_hand_started then
+      --- of the current lobby cohort. Subsequent readies do not reset
+      --- it; if a join arrives after the timer started the new player
+      --- still gets the remaining window to ready up before being
+      --- ejected. The timer is cleared when `release_lobby_to_table`
+      --- empties the lobby, when the table empties, or when the last
+      --- ready in the lobby is rescinded.
+      if not c._first_ready_at then
         c._first_ready_at = os.clock()
       end
     else

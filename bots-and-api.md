@@ -30,7 +30,7 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 | `GET` | `/v1/tables/:id/my-turn` | Whether it is **your** turn: requires `X-Player-Token`; response `{ "ok": true, "player_id": "...", "is_my_turn": true|false }` |
 | `POST` | `/v1/tables/:id/join` | Take a seat; response includes `token` and `table` |
 | `POST` | `/v1/tables/:id/leave` | Leave (`player_id` in JSON) |
-| `POST` | `/v1/tables/:id/ready` | Signal readiness for the current empty-table cohort's first hand on a `require_start_flags` / `wait_for_ready` table. Body: `{ player_id, ready? }` (`ready` defaults to true). **Requires** `X-Player-Token`. |
+| `POST` | `/v1/tables/:id/ready` | Signal readiness from the lobby on a `require_start_flags` / `wait_for_ready` table. Required for every joiner before they are seated and dealt in (applies to both the first cohort and any later mid-game joiner). Body: `{ player_id, ready? }` (`ready` defaults to true). **Requires** `X-Player-Token`. |
 | `POST` | `/v1/tables/:id/start` | Alias for `/ready` for bots that model readiness as a start request. |
 | `POST` | `/v1/tables/:id/start-flag` | Alias for `/ready` with explicit start-flag naming. |
 | `POST` | `/v1/tables/:id/actions` | Submit an action (`player_id`, `action`, optional `amount`, optional `queue`, optional `client_action_id`, optional `expected_action_seq`). **Requires** `X-Player-Token` for any seated player. |
@@ -50,14 +50,16 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 
 ## Ready gate for tournament-style tables (`wait_for_ready`)
 
-Tables can be created with the option **`require_start_flags: true`** (alias: `wait_for_ready: true`; admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server holds every joiner in a **pre-game lobby** for the first hand of each cohort: they receive a token but **no seat number, no chips deduction, no button/SB/BB position, and no cards** until everyone is ready. While in the lobby they appear in `ready_status.lobby_players` and the table's `seats` array continues to show empty slots; submitting an action returns `not_ready`.
+Tables can be created with the option **`require_start_flags: true`** (alias: `wait_for_ready: true`; admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server holds **every** joiner in a **pre-game lobby** until they POST `/ready`: they receive a token but **no seat number, no chips deduction, no button/SB/BB position, and no cards** until the gate releases for them. While in the lobby they appear in `ready_status.lobby_players` and the table's `seats` array continues to show empty slots; submitting an action returns `not_ready`.
 
-The lobby is released when **either**:
+The lobby is **continuous** — it applies before the first hand *and* between every later hand: a player who joins mid-game lands in the lobby, has to ready up, and is only dealt in for the *next* hand once the gate releases. Players already seated from a previous lobby cohort do **not** have to re-ready every hand; they are considered implicitly ready as long as they remain seated.
 
-- every player at the table (lobby + any pre-existing seats; minimum 2) has signalled readiness, **or**
-- `action_timeout_sec` has elapsed since the *first* ready signal arrived **and** at least two players have readied — in which case any player who never readied is **fully ejected from the table** (their lobby/seat slot is dropped, their auth token is invalidated, and any running bot is killed) before the surviving cohort is seated.
+The lobby releases when **either**:
 
-When the lobby releases, **seats are randomly shuffled across the table**, blinds are posted, and cards are dealt. The optional `seat` field on `POST /join` is ignored while the gate is active — placement is randomized by design.
+- every lobby member has signalled readiness (with at least two participants total — seated + ready lobby members) **and** the start-grace window has elapsed (default 8s, env `POKER_START_GRACE_SEC`), **or**
+- `action_timeout_sec` has elapsed since the *first* ready signal of the current lobby cohort arrived **and** at least two participants are ready — in which case any lobby member who never readied is **fully ejected from the table** (their lobby slot is dropped, their auth token is invalidated, and any running bot is killed) before the rest are seated.
+
+When the lobby releases, lobby members are **randomly shuffled across the free seats** of the table, blinds are posted, and cards are dealt. Players already seated keep their seat. The optional `seat` field on `POST /join` is ignored while the gate is active — placement of new joiners is randomized by design.
 
 Players signal readiness with:
 
@@ -99,14 +101,15 @@ X-Player-Token: <token from /join>
 
 **Behaviour summary**
 
-- The cohort's first hand does **not** start until `ready_players` covers every player at the table (lobby + any pre-existing seats such as AIs) **and** at least two players are present. Actions submitted before then are auto-queued (or returned with **`not_ready`** when `queue: false`) — and lobby joiners that submit actions before being seated always get **`not_ready`** because they have no seat to act from.
-- Join requests are accepted until that first hand starts. While the lobby is active joiners are appended FIFO to `lobby_players`. The lobby's seat assignment is **randomized** when the gate releases; pre-existing seats keep their position and only lobby joiners are shuffled.
-- Once that first hand is dealt, every subsequent hand proceeds automatically for as long as the table never becomes empty.
-- When the table reaches **zero seated players**, the gate re-arms. The next set of players must send `/ready` or `/start` again before their first hand.
-- A player who `leave`s (or is kicked) is removed from `ready_players`; if that leave makes the table empty, all ready flags and queued actions are cleared for the next cohort.
-- **Admin `POST /admin/api/tables/:id/reset`** also re-arms the gate — all ready flags are cleared and a fresh round of ready signals is required.
+- A hand does **not** start while there is at least one un-ready non-AI player in `lobby_players`. Actions submitted by lobby members are returned with **`not_ready`** (lobby joiners have no seat to act from). Actions submitted by a *seated* player while the lobby is blocking the next hand are auto-queued for that next hand (or returned with **`not_ready`** when `queue: false`).
+- Joins are accepted at any time. They are always appended FIFO to `lobby_players`; even players who join mid-hand land in the lobby and only join the felt for the next hand once they have readied. Lobby members are shuffled into the free seats randomly when the gate releases — pre-existing seats keep their position and only the new lobby cohort is shuffled.
+- The hand-end → next-hand transition consults the gate every time. If the lobby is empty and ≥ 2 players are seated, the next hand starts automatically. If a new joiner is in the lobby, the next hand is held until they ready (or time out).
+- When the table reaches **zero seated players** *and* the lobby is empty, the gate re-arms (cosmetic — `first_hand_started` returns to false and the start-grace clock is cleared).
+- A player who `leave`s (or is kicked) is removed from `ready_players` and from any lobby slot; if that leave empties both the table and the lobby, all ready flags and queued actions are cleared for the next cohort.
+- **Admin `POST /admin/api/tables/:id/reset`** force-empties the table and lobby and re-arms the gate.
+- **Admin `POST /admin/api/tables/:id/settings`** with `require_start_flags: true` migrates any humans currently seated back into the lobby so they have to ready up again before the next deal (AI players keep their seat).
 
-The flag is surfaced on every snapshot as `table.ready` and on `GET /v1/tables` as `wait_for_ready` / `first_hand_started`, so clients can poll to see who is still holding things up. Use `start_timeout_remaining_sec` to render a countdown — once it hits zero the gate releases and any non-ready seat is folded for the first hand. Late joiners do **not** reset the timer; if they want to play hand #1 they must ready up before the existing window closes.
+The flag is surfaced on every snapshot as `table.ready` and on `GET /v1/tables` as `wait_for_ready` / `first_hand_started`, so clients can poll to see who is still holding things up. Use `start_timeout_remaining_sec` to render a countdown — once it hits zero any still-un-ready lobby member is **ejected** from the table (they must `POST /join` again to re-enter, which puts them back in the lobby) and the surviving ready cohort is seated. Late joiners do **not** reset the timer; if they want to play in the impending hand they must ready up before the existing window closes.
 
 ---
 
