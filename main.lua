@@ -159,6 +159,14 @@ local function create_table_context(id, max_seats, opts)
     wait_for_ready = opts.wait_for_ready == true,
     first_hand_started = false,
     ready_players = {}, -- player_id -> true
+    --- Pre-game lobby. While `wait_for_ready` is on and the cohort's first
+    --- hand has not started, joins are routed here instead of `tbl:seat_player`
+    --- so no chips are deducted, no positions (button/SB/BB) are assigned, and
+    --- no cards are dealt. Each entry is `{ player_id, chips }` and the order
+    --- preserves arrival (FIFO). Once every lobby player readies (or the
+    --- limbo-fold timeout fires with at least 2 ready), the lobby is shuffled
+    --- and players are randomly seated, then `start_hand` runs as usual.
+    pending_seats = {},
   }
 end
 
@@ -213,13 +221,119 @@ local function clear_player_action_state(ctx, player_id)
   end
 end
 
---- Tally seated players and how many of them have readied this cohort. A
---- single helper keeps the gate and the snapshot in lock-step.
+--- True while the cohort is in the pre-game lobby phase: `wait_for_ready`
+--- is on, the first hand has not started, and joins should be routed to
+--- `ctx.pending_seats` rather than `tbl:seat_player`. While this returns
+--- true no chips are deducted, no button/SB/BB position is assigned, and
+--- no cards are dealt for any joiner.
+local function lobby_active(ctx)
+  return ctx
+    and ctx.wait_for_ready == true
+    and not ctx.first_hand_started
+end
+
+--- 1-based index of `pid` in `ctx.pending_seats`, or nil if absent.
+local function lobby_index(ctx, pid)
+  local list = ctx and ctx.pending_seats
+  if not list or not pid then
+    return nil
+  end
+  for i = 1, #list do
+    if list[i].player_id == pid then
+      return i
+    end
+  end
+  return nil
+end
+
+--- Remove the entry for `pid` from `ctx.pending_seats` if present.
+local function lobby_remove(ctx, pid)
+  local idx = lobby_index(ctx, pid)
+  if not idx then return false end
+  table.remove(ctx.pending_seats, idx)
+  if ctx.ready_players then
+    ctx.ready_players[pid] = nil
+  end
+  if next(ctx.ready_players or {}) == nil then
+    ctx._first_ready_at = nil
+  end
+  return true
+end
+
+--- Fisher-Yates shuffle (in place).
+local function shuffle_in_place(t)
+  for i = #t, 2, -1 do
+    local j = math.random(i)
+    t[i], t[j] = t[j], t[i]
+  end
+end
+
+--- Move every player from `ctx.pending_seats` onto the table at random
+--- unoccupied seats. Order of arrival is forgotten on purpose -- the user
+--- requested random table placement once everyone has signalled. Returns
+--- the number of players seated. Players who could not be seated (table
+--- somehow full) stay in the lobby and the caller should re-arm.
+local function release_lobby_to_table(ctx)
+  if not ctx or not ctx.pending_seats or #ctx.pending_seats == 0 then
+    return 0
+  end
+  local tbl = ctx.tbl
+
+  --- Snapshot lobby into a local list so we can shuffle and clear the
+  --- canonical store atomically.
+  local lobby = ctx.pending_seats
+  ctx.pending_seats = {}
+
+  --- Available seats (random order).
+  local free = {}
+  for i = 1, tbl.max_seats do
+    if not tbl:get_seat(i) then
+      free[#free + 1] = i
+    end
+  end
+  shuffle_in_place(free)
+  shuffle_in_place(lobby)
+
+  local seated = 0
+  for _, entry in ipairs(lobby) do
+    local seat = table.remove(free)
+    if not seat then
+      --- No more seats; push the player back into the lobby. Subsequent
+      --- joins on this cohort will defer per `try_join_seat`.
+      ctx.pending_seats[#ctx.pending_seats + 1] = entry
+    else
+      local ok = tbl:seat_player({
+        seat = seat,
+        player_id = entry.player_id,
+        chips = entry.chips,
+      })
+      if ok then
+        seated = seated + 1
+        io.stderr:write(
+          "[table:" .. tostring(tbl.id) .. "] Lobby release seated "
+            .. tostring(entry.player_id) .. " at seat " .. tostring(seat) .. "\n"
+        )
+      else
+        --- Re-queue if seat_player rejected (e.g. duplicate ID race).
+        ctx.pending_seats[#ctx.pending_seats + 1] = entry
+      end
+    end
+  end
+  if seated > 0 then
+    ctx._last_join_at = os.clock()
+  end
+  return seated
+end
+
+--- Tally seated players + lobby players and how many of them have readied
+--- this cohort. A single helper keeps the gate and the snapshot in
+--- lock-step.
 local function tally_ready(ctx)
   local tbl = ctx and ctx.tbl
   local seated = {}
   local ready = {}
   local waiting = {}
+  local seen = {}
   if not tbl then
     return seated, ready, waiting
   end
@@ -227,11 +341,34 @@ local function tally_ready(ctx)
     local s = tbl:get_seat(i)
     if s then
       local pid = s.player_id
+      seen[pid] = true
       seated[#seated + 1] = pid
-      if ctx.ready_players and ctx.ready_players[pid] then
+      --- AI players have no client to POST `/ready`, so we treat them as
+      --- implicitly ready. Without this an `with_ais` table that flips on
+      --- `wait_for_ready` would never start (the AIs would sit in
+      --- waiting_players forever).
+      local is_ai = ctx.ai_players and ctx.ai_players[pid]
+      if (ctx.ready_players and ctx.ready_players[pid]) or is_ai then
         ready[#ready + 1] = pid
       else
         waiting[#waiting + 1] = pid
+      end
+    end
+  end
+  --- Lobby (pre-game) players count toward the gate too: the cohort cannot
+  --- start until everyone in the lobby has readied, otherwise we'd shuffle
+  --- and seat half the room while the rest is mid-handshake.
+  if ctx.pending_seats then
+    for _, entry in ipairs(ctx.pending_seats) do
+      local pid = entry.player_id
+      if not seen[pid] then
+        seen[pid] = true
+        seated[#seated + 1] = pid
+        if ctx.ready_players and ctx.ready_players[pid] then
+          ready[#ready + 1] = pid
+        else
+          waiting[#waiting + 1] = pid
+        end
       end
     end
   end
@@ -340,16 +477,30 @@ local function ready_status_snapshot(ctx)
     end
   end
 
+  --- Lobby roster (FIFO order of arrival). Seats in this list have not been
+  --- placed at the table yet -- they pay no blinds and are not dealt cards
+  --- until `release_lobby_to_table` shuffles them onto random seats.
+  local lobby = {}
+  if ctx.pending_seats then
+    for i, e in ipairs(ctx.pending_seats) do
+      lobby[i] = e.player_id
+    end
+  end
+
   return {
     wait_for_ready = ctx.wait_for_ready == true,
     require_start_flags = ctx.wait_for_ready == true,
     first_hand_started = ctx.first_hand_started == true,
+    in_lobby_phase = lobby_active(ctx) == true,
     pending_join_count = ctx.pending_join_count or 0,
     start_grace_sec = ctx.start_grace_sec or 0,
     ready_players = ready_list,
     waiting_players = waiting_list,
-    --- True when every seated player has voluntarily readied (no timeout
-    --- needed). Pending joins and grace still apply.
+    --- Players who are not yet at a seat. They are tracked separately so
+    --- UIs can render a "waiting room" panel distinct from the felt.
+    lobby_players = lobby,
+    --- True when every player (seated + lobby) has voluntarily readied (no
+    --- timeout needed). Pending joins and grace still apply.
     all_ready = ctx.wait_for_ready == true
       and (not ctx.first_hand_started)
       and (not pending_block)
@@ -367,9 +518,9 @@ local function ready_status_snapshot(ctx)
 end
 
 local function rearm_start_gate_if_empty(ctx)
-  if not ctx or not ctx.tbl or ctx.tbl:occupied_count() > 0 then
-    return false
-  end
+  if not ctx or not ctx.tbl then return false end
+  if ctx.tbl:occupied_count() > 0 then return false end
+  if ctx.pending_seats and #ctx.pending_seats > 0 then return false end
 
   --- A completely empty table starts a new cohort. If wait_for_ready is on,
   --- the next cohort must explicitly signal before its first hand; if it is
@@ -380,6 +531,7 @@ local function rearm_start_gate_if_empty(ctx)
   end
   ctx.first_hand_started = false
   ctx.ready_players = {}
+  ctx.pending_seats = {}
   ctx.action_queue = {}
   ctx.action_queue_drops = {}
   ctx.last_action_results = {}
@@ -576,6 +728,12 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
 
   local seat = tbl:seat_for_player(player_id)
   if not seat then
+    --- Lobby (pre-game): the player joined but has not been shuffled into
+    --- a seat yet. They cannot act on a hand that has not been dealt; the
+    --- only valid pre-game call for them is `/ready`.
+    if lobby_index(ctx, player_id) then
+      return nil, "not_ready"
+    end
     return nil, "not_seated"
   end
 
@@ -640,6 +798,12 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
   end
 
   if hand.status == "idle" then
+    --- Release any pre-game lobby before starting a hand so the lobby
+    --- players (no chips deducted yet) are seated and dealt in too.
+    --- ready_gate_blocks_start has already returned false to reach here.
+    if ctx.pending_seats and #ctx.pending_seats > 0 then
+      release_lobby_to_table(ctx)
+    end
     local first, perr = hand:peek_first_actor(tbl)
     if not first then
       return nil, perr
@@ -838,6 +1002,14 @@ local function table_snapshot(ctx)
   check_action_timeout(ctx)
   rearm_start_gate_if_empty(ctx)
   if not ready_gate_blocks_start(ctx) then
+    --- Pre-game lobby release. With `wait_for_ready` on, joins are queued
+    --- in `pending_seats` until the gate opens; the moment it does we
+    --- shuffle the lobby into random seats so `start_hand` (run inside
+    --- `ai.run_until_human`) gets a fully-populated table to deal from.
+    --- For non-`wait_for_ready` tables this is a no-op.
+    if ctx.pending_seats and #ctx.pending_seats > 0 then
+      release_lobby_to_table(ctx)
+    end
     ai.run_until_human(ctx)
   end
   local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue, ctx.action_queue_drops)
@@ -928,9 +1100,36 @@ local function run_http()
     if c.tbl:seat_for_player(player_id) then
       return "error", join_http_error("already_seated")
     end
+    if lobby_index(c, player_id) then
+      return "error", join_http_error("already_seated")
+    end
     if not from_pending and has_prior_pending_join_for_table(state, c) then
       return "defer"
     end
+
+    local buy_in = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
+
+    --- Pre-game lobby: when `wait_for_ready` is on and the cohort's first
+    --- hand has not been dealt, joins are queued in `pending_seats` rather
+    --- than placed at a specific seat. Chips are not deducted, no
+    --- button/SB/BB position is assigned, and no cards are dealt. The
+    --- shuffle and actual `seat_player` happens in `release_lobby_to_table`
+    --- once every lobby member has POSTed `/ready` (or the limbo-fold
+    --- timeout fires with at least 2 ready). The optional `seat` field on
+    --- the request is ignored in lobby mode -- placements are random by
+    --- design.
+    if lobby_active(c) then
+      if c.tbl:occupied_count() + #c.pending_seats >= c.tbl.max_seats then
+        return "defer"
+      end
+      c.pending_seats[#c.pending_seats + 1] = {
+        player_id = player_id,
+        chips = buy_in,
+      }
+      c._last_join_at = os.clock()
+      return "ok", join_response_success(c, player_id)
+    end
+
     local seat_raw = j.seat
     local seat
     if seat_raw == nil or seat_raw == "" then
@@ -957,7 +1156,6 @@ local function run_http()
     --- Mid-hand joins are allowed: the player takes the seat now and is
     --- dealt in at the next start_hand. Their action submissions during
     --- the in-progress hand are queued (while_idle=true) per submit_action.
-    local buy_in = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     local ok, err = c.tbl:seat_player({
       seat = seat,
       player_id = player_id,
@@ -1301,11 +1499,15 @@ local function run_http()
     end
     player_id = tostring(player_id)
 
+    --- Accept readies from either seated players or pre-game lobby players.
+    --- The lobby is the normal case under `wait_for_ready` -- players join
+    --- the lobby first, ready up, and only then get shuffled into seats.
     local seat = c.tbl:seat_for_player(player_id)
-    if not seat then
+    local in_lobby = lobby_index(c, player_id) ~= nil
+    if not seat and not in_lobby then
       return {
         "404 Not Found",
-        api.error_body("not_seated", "Player is not seated at this table."),
+        api.error_body("not_seated", "Player is not at this table (and not in the pre-game lobby)."),
       }
     end
 
@@ -1395,9 +1597,20 @@ local function run_http()
     player_id = tostring(player_id)
     local seat = c.tbl:seat_for_player(player_id)
     if not seat then
+      --- Lobby leave: drop the FIFO entry, drop the token, re-arm if the
+      --- table is now completely empty (no seats and no lobby entries).
+      if lobby_remove(c, player_id) then
+        clear_player_action_state(c, player_id)
+        remove_player_token(c, player_id)
+        rearm_start_gate_if_empty(c)
+        return {
+          ok = true,
+          table = filter_snapshot_for_player(table_snapshot(c), nil, c.tbl),
+        }
+      end
       return {
         "404 Not Found",
-        api.error_body("not_seated", "Player is not seated at this table."),
+        api.error_body("not_seated", "Player is not at this table."),
       }
     end
     if c.hand.status == "active" and c.hand.folded and not c.hand.folded[seat] then
@@ -2030,6 +2243,17 @@ local function run_http()
 
     local seat = c.tbl:seat_for_player(player_id)
     if not seat then
+      if lobby_remove(c, player_id) then
+        clear_player_action_state(c, player_id)
+        if c.running_bots[player_id] then
+          kill_bot(c.running_bots[player_id].pid)
+          c.running_bots[player_id] = nil
+        end
+        remove_player_token(c, player_id)
+        rearm_start_gate_if_empty(c)
+        io.stderr:write("[admin] Kicked lobby player: " .. player_id .. "\n")
+        return { ok = true, kicked = player_id, table = table_snapshot(c) }
+      end
       return { "404 Not Found", api.error_body("not_seated", "Player not found at table.") }
     end
 
@@ -2070,6 +2294,7 @@ local function run_http()
     --- wait_for_ready) pauses again until everyone reconfirms.
     c.first_hand_started = false
     c.ready_players = {}
+    c.pending_seats = {}
     c._prev_hand_status = nil
     c._last_join_at = nil
     c._last_start_flag_at = nil

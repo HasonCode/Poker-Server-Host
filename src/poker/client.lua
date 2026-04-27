@@ -187,6 +187,13 @@ end
 
 --- Signal readiness/start confirmation for the first hand of the current
 --- table cohort on a table configured with `wait_for_ready = true`.
+---
+--- Lifecycle: join_table places the player in a pre-game lobby (no seat
+--- number, no chips deducted, no cards). Once every lobby member has
+--- signalled ready (or the server's action_timeout_sec since the first
+--- ready elapses with at least two ready), the lobby is shuffled and
+--- players are randomly seated for the first hand.
+---
 --- `ready` defaults to true; pass false to withdraw a previous signal.
 --- Requires the player token from join_table.
 --- On tables without the option the server still accepts the call but

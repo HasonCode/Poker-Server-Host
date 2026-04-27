@@ -68,10 +68,13 @@ function M.after_start_hand_limbo_autofold(ctx)
     return
   end
   local readied = ctx.ready_players
+  local ai_players = ctx.ai_players or {}
   local autofold_first_actor = false
   for _, seat in ipairs(hand.occupied_ring or {}) do
     local row = tbl:get_seat(seat)
-    if row and not readied[row.player_id] then
+    --- AI players never POST `/ready` -- they're implicitly ready and must
+    --- not be limbo-folded. Skip them here to mirror tally_ready.
+    if row and not readied[row.player_id] and not ai_players[row.player_id] then
       hand.folded[seat] = true
       hand.pending[seat] = nil
       hand.acted_this_street[seat] = true

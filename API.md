@@ -85,14 +85,18 @@ Common errors: **`seat_taken`** (409), **`table_full`** (409), **`invalid_seat`*
 
 ### POST `/v1/tables/{table_id}/ready`
 
-Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with **`require_start_flags: true`** (alias: `wait_for_ready: true`). A cohort begins when players sit at a table that was previously empty.
+Signal that a player is ready for the **first hand of the current table cohort** on a table created with **`require_start_flags: true`** (alias: `wait_for_ready: true`). A cohort begins when players sit at a table that was previously empty.
 
-While the gate is active, every seated player is in **limbo**: no cards are dealt, action submissions are queued (or rejected with `not_ready` when `queue: false`), and `hand.status` stays `idle`. The gate releases when **either** condition is met:
+While the gate is active the cohort is in a **pre-game lobby**: joiners get a token but **no seat number, no chips deduction, no button/SB/BB position, and no cards** until the gate releases. They sit in `ready_status.lobby_players` (FIFO arrival order) and the table's `seats` array shows them as empty. Action submissions for lobby players are rejected with `not_ready` (the only meaningful pre-game call is `/ready` itself).
 
-1. **Unanimous ready** — every seated player (minimum 2) has signalled ready, *and* any deferred joins for the same table have been processed, *and* the small `start_grace_sec` settle window has elapsed since the most recent join/ready. All seated players are dealt in normally.
-2. **Limbo-fold timeout** — `action_timeout_sec` has elapsed since the **first** `/ready` arrived, and at least two seated players have readied. The hand starts and any seat that did *not* ready up is **auto-folded for that first hand only**. They are dealt cards and pay any blinds owed by their position, but they take no action and forfeit the hand. From the second hand of the cohort onward they participate normally.
+The gate releases when **either** condition is met:
 
-If only one player has readied when the timer expires the gate keeps blocking — a hand cannot start with a single non-folded player. Subsequent hands for the cohort deal automatically. If the table becomes empty again the gate re-arms for the next cohort. On tables without the option, play auto-starts as soon as two players are seated; this endpoint is still accepted but has no effect on dealing.
+1. **Unanimous ready** — every player at the table (lobby + any pre-existing seats; minimum 2) has signalled ready, *and* any deferred joins have been processed, *and* the `start_grace_sec` settle window has elapsed since the most recent join/ready. The lobby is then **shuffled into random seats** at the table, blinds are posted as usual, and cards are dealt.
+2. **Limbo-fold timeout** — `action_timeout_sec` has elapsed since the **first** `/ready` arrived, and at least two players have readied. The lobby is shuffled and seated as above, then any seat whose player did *not* ready up is **auto-folded for that first hand only**. They pay any blinds owed by the random position they landed on, but take no action and forfeit the hand. From the second hand of the cohort onward they participate normally.
+
+If only one player has readied when the timer expires the gate keeps blocking — a hand cannot start with a single non-folded player. Subsequent hands for the cohort deal automatically. If the table becomes empty again the gate re-arms for the next cohort and the lobby starts over. On tables without the option, play auto-starts as soon as two players are seated; this endpoint is still accepted but has no effect on dealing.
+
+> **Note:** because seats are randomly assigned on lobby release, the optional `seat` field in `POST /v1/tables/{id}/join` is *ignored* while the lobby is active. Pre-existing seats (e.g. AI players that the table was created with) keep their seats; only lobby joiners are randomized.
 
 `POST /v1/tables/{table_id}/start` and `POST /v1/tables/{table_id}/start-flag` are aliases for this endpoint.
 
@@ -104,7 +108,7 @@ Body:
 { "player_id": "alice", "ready": true }
 ```
 
-- **`player_id`** — Must already be seated at this table.
+- **`player_id`** — Must be at this table, either seated or in the pre-game lobby (`ready_status.lobby_players`).
 - **`ready`** — Optional boolean, defaults to `true`. Pass `false` to withdraw a previous signal.
 
 **200** response:
@@ -118,8 +122,10 @@ Body:
     "wait_for_ready": true,
     "require_start_flags": true,
     "first_hand_started": false,
+    "in_lobby_phase": true,
     "ready_players": ["alice"],
     "waiting_players": ["bob"],
+    "lobby_players": ["alice", "bob"],
     "all_ready": false,
     "first_ready_received": true,
     "start_timeout_sec": 60,
@@ -131,7 +137,9 @@ Body:
 }
 ```
 
-- `ready.ready_players` / `ready.waiting_players` are also surfaced inside every `table` snapshot (`table.ready`) on other endpoints, so bots can poll without spamming the ready endpoint.
+- `ready.ready_players` / `ready.waiting_players` / `ready.lobby_players` are also surfaced inside every `table` snapshot (`table.ready`) on other endpoints, so bots can poll without spamming the ready endpoint.
+- **`in_lobby_phase`** is `true` while the gate is active and lobby joiners have not yet been seated. UIs should render `lobby_players` as a "waiting room" panel separate from the felt; once the gate releases, those players appear in the table's `seats` array at randomly assigned positions and `in_lobby_phase` flips to `false`.
+- **`lobby_players`** lists the players who joined while the gate was active, in FIFO arrival order. Their entries do not appear in the `seats` array yet — `seats[i]` returns `false` for unassigned positions. Chip stacks for these players are not visible until they are seated; clients can assume the table's `buy_in_chips`.
 - **`first_hand_started`** flips to `true` as soon as the cohort's first hand is dealt. It resets only when the table becomes completely empty or when `POST /admin/api/tables/{id}/reset` is called.
 - **`start_timeout_sec`** equals the table's `action_timeout_sec` while the gate is active and the cohort is waiting for unanimous ready. **`start_timeout_remaining_sec`** is the live countdown until the limbo-fold deadline. It is `null` until the first `/ready` arrives; once it hits zero the hand starts and any seat in `waiting_players` is folded for that first hand. If `action_timeout_sec` is `0` (timeouts disabled) the timeout path is disabled entirely and the hand only starts on unanimous ready.
 - Leaving the table (`POST /leave` / admin kick) removes the player from `ready_players`. A remaining seat that was previously "all ready" will see the gate re-arm until it reconfirms (or another player joins and signals). If the *last* readied player rescinds (sends `ready: false` or leaves), the limbo-fold timer is also cleared and will restart from zero on the next ready.

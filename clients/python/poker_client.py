@@ -354,9 +354,20 @@ class PokerClient:
     ) -> Any:
         """
         Signal readiness/start confirmation for the first hand of the current
-        table cohort on a table configured with ``wait_for_ready``. A cohort
-        begins when players sit at a table that was previously empty. Pass
-        ``ready=False`` to withdraw a previous signal.
+        table cohort on a table configured with ``wait_for_ready``.
+
+        Lifecycle:
+
+        * ``join_table`` on a ``wait_for_ready`` table places the bot in a
+          **pre-game lobby** -- no seat number, no chips deducted, no cards.
+          The bot still receives a token.
+        * Call ``set_ready`` (or :meth:`start_table`) once the bot is fully
+          loaded. Once **every** lobby member has signalled ready (or the
+          server's ``action_timeout_sec`` since the first ready elapses with
+          at least two ready), the lobby is shuffled, players are randomly
+          seated, blinds are posted, and the first hand is dealt.
+        * Pass ``ready=False`` to withdraw a previous signal (e.g. on bot
+          warm-up failure).
 
         On tables that were created without ``wait_for_ready`` this call is
         accepted (the server tracks the flag) but the table deals normally

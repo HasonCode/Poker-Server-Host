@@ -50,10 +50,14 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 
 ## Ready gate for tournament-style tables (`wait_for_ready`)
 
-Tables can be created with the option **`require_start_flags: true`** (alias: `wait_for_ready: true`; admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server places every seated player in a **limbo state** for the first hand of each cohort: no cards are dealt, action submissions are queued, and `hand.status` stays `idle`. The hand only deals when **either**:
+Tables can be created with the option **`require_start_flags: true`** (alias: `wait_for_ready: true`; admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server holds every joiner in a **pre-game lobby** for the first hand of each cohort: they receive a token but **no seat number, no chips deduction, no button/SB/BB position, and no cards** until everyone is ready. While in the lobby they appear in `ready_status.lobby_players` and the table's `seats` array continues to show empty slots; submitting an action returns `not_ready`.
 
-- every seated player (minimum 2) has signalled readiness, **or**
-- `action_timeout_sec` has elapsed since the *first* ready signal arrived **and** at least two players have readied — in which case the hand starts and any seat that never readied is **auto-folded for that one hand**.
+The lobby is released when **either**:
+
+- every player at the table (lobby + any pre-existing seats; minimum 2) has signalled readiness, **or**
+- `action_timeout_sec` has elapsed since the *first* ready signal arrived **and** at least two players have readied — in which case the lobby is released and any player that never readied is **auto-folded for that one hand**.
+
+When the lobby releases, **seats are randomly shuffled across the table**, blinds are posted, and cards are dealt. The optional `seat` field on `POST /join` is ignored while the gate is active — placement is randomized by design.
 
 Players signal readiness with:
 
@@ -80,8 +84,10 @@ X-Player-Token: <token from /join>
     "wait_for_ready": true,
     "require_start_flags": true,
     "first_hand_started": false,
+    "in_lobby_phase": true,
     "ready_players": ["MyBot"],
     "waiting_players": ["OtherBot"],
+    "lobby_players": ["MyBot", "OtherBot"],
     "all_ready": false,
     "first_ready_received": true,
     "start_timeout_sec": 60,
@@ -93,8 +99,8 @@ X-Player-Token: <token from /join>
 
 **Behaviour summary**
 
-- The cohort's first hand does **not** start until `ready_players` covers every currently-seated player **and** at least two players are seated. Actions submitted before then are auto-queued and fire on the deal; sending `"queue": false` returns **`not_ready`** (HTTP 409).
-- Join requests are accepted until that first hand starts. If joins are deferred, they are seated FIFO for that table; newer joins do not jump ahead of older queued joins.
+- The cohort's first hand does **not** start until `ready_players` covers every player at the table (lobby + any pre-existing seats such as AIs) **and** at least two players are present. Actions submitted before then are auto-queued (or returned with **`not_ready`** when `queue: false`) — and lobby joiners that submit actions before being seated always get **`not_ready`** because they have no seat to act from.
+- Join requests are accepted until that first hand starts. While the lobby is active joiners are appended FIFO to `lobby_players`. The lobby's seat assignment is **randomized** when the gate releases; pre-existing seats keep their position and only lobby joiners are shuffled.
 - Once that first hand is dealt, every subsequent hand proceeds automatically for as long as the table never becomes empty.
 - When the table reaches **zero seated players**, the gate re-arms. The next set of players must send `/ready` or `/start` again before their first hand.
 - A player who `leave`s (or is kicked) is removed from `ready_players`; if that leave makes the table empty, all ready flags and queued actions are cleared for the next cohort.

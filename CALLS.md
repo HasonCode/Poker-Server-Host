@@ -202,12 +202,16 @@ Stand up from a table. If a hand is active, the player is auto-folded first.
 
 ### `POST /v1/tables/:id/ready`
 
-Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with `require_start_flags: true` (alias: `wait_for_ready: true`). A cohort begins when players sit at a table that was previously empty.
+Signal that a player is ready for the **first hand of the current table cohort** on a table created with `require_start_flags: true` (alias: `wait_for_ready: true`). A cohort begins when players join a table that was previously empty.
 
-While the gate is active, every seated player is in **limbo**: no cards are dealt, action submissions are queued, and `hand.status` stays `idle`. The gate releases when **either**:
+While the gate is active, every joiner sits in a **pre-game lobby**: they have a token but **no seat number, no chips deduction, no button/SB/BB position, and no cards**. They appear in `ready_status.lobby_players`; the table's `seats` array still shows their slot empty. Action submissions for lobby players return `not_ready`.
 
-- every seated player (≥ 2) has signalled readiness, **or**
-- `action_timeout_sec` has elapsed since the *first* `/ready` arrived **and** at least two seats have readied — in which case the hand starts and any seat that never readied is **auto-folded for that one hand only**. They are dealt cards and pay any blinds owed by their position, but they take no action and forfeit the hand. From the second hand of the cohort onward they participate normally.
+The lobby releases when **either**:
+
+- every player at the table (lobby + any pre-existing seats; ≥ 2) has signalled readiness, **or**
+- `action_timeout_sec` has elapsed since the *first* `/ready` arrived **and** at least two players have readied — in which case the lobby releases and any player that never readied is **auto-folded for that one hand only**.
+
+When the lobby releases, **seats are randomly shuffled across the table** and `start_hand` runs as usual: blinds are posted, cards are dealt, the button/SB/BB are assigned. Pre-existing seats (e.g. AI players) keep their position; only lobby joiners are randomized. Any optional `seat` field passed to `POST /join` while the lobby is active is ignored — placement is randomized by design.
 
 All subsequent hands deal automatically until the table becomes empty again. On tables without this option, play auto-starts when two players are seated; this call is still accepted for consistency but does not affect dealing. The snapshot's `ready_status.start_timeout_remaining_sec` ticks the live countdown; clients can render it as a deadline.
 
@@ -221,7 +225,7 @@ All subsequent hands deal automatically until the table becomes empty again. On 
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `player_id` | string | yes | Must be seated |
+| `player_id` | string | yes | Must be at this table — either seated or in the pre-game lobby (`ready_status.lobby_players`) |
 | `ready` | boolean | no | Defaults to `true`. Pass `false` to withdraw a previous signal |
 
 **Response**
@@ -235,11 +239,13 @@ All subsequent hands deal automatically until the table becomes empty again. On 
     "wait_for_ready": true,
     "require_start_flags": true,
     "first_hand_started": false,
+    "in_lobby_phase": true,
     "first_ready_received": true,
     "start_timeout_sec": 60,
     "start_timeout_remaining_sec": 47,
     "ready_players": ["Alice"],
     "waiting_players": ["Bob"],
+    "lobby_players": ["Alice", "Bob"],
     "all_ready": false
   },
   "table": { "...snapshot..." }
