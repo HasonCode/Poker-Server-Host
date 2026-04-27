@@ -53,6 +53,7 @@ local function action_http_error(err, extra)
     min_raise = { "400 Bad Request", "min_raise", "Raise does not meet the minimum raise size." },
     cannot_raise_self = { "400 Bad Request", "cannot_raise_self", "You cannot raise again until another player has raised." },
     stale_action = { "409 Conflict", "stale_action", "expected_action_seq does not match current hand.action_seq; refresh state and resubmit." },
+    hand_idle = { "409 Conflict", "hand_idle", "No active hand; the server should start the hand before applying this action." },
     not_ready = { "409 Conflict", "not_ready", "This table is waiting for every seated player to POST /v1/tables/{id}/start before dealing the first hand." },
     token_required = { "401 Unauthorized", "token_required", "X-Player-Token header required for this action (returned by POST /v1/tables/{id}/join)." },
     token_invalid = { "403 Forbidden", "token_invalid", "X-Player-Token does not match this player_id at this table." },
@@ -644,6 +645,15 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
       return nil, perr
     end
     if first == seat then
+      --- apply_action no longer auto-starts an idle hand (that bypassed the
+      --- ready gate and first-hand limbo autofold). Mirror ai.run_until_human.
+      local ok_sh, err_sh = hand:start_hand(tbl)
+      if not ok_sh then
+        return nil, err_sh
+      end
+      ai.after_start_hand_limbo_autofold(ctx)
+      ctx.first_hand_started = true
+      ctx._first_ready_at = nil
       local ok, err2 = hand:apply_action(tbl, player_id, act, amt)
       if not ok then
         return nil, err2
@@ -2133,10 +2143,17 @@ local function run_http()
       start_flag_setting = j.wait_for_ready
     end
     if start_flag_setting ~= nil then
-      --- Toggling this flag only affects the current cohort if its first hand
-      --- has not started yet; otherwise it applies after reset or after the
-      --- table becomes empty and the next cohort begins.
-      c.wait_for_ready = start_flag_setting == true
+      local new_val = start_flag_setting == true
+      local was = c.wait_for_ready == true
+      c.wait_for_ready = new_val
+      --- Turning the gate ON while the hand is idle re-arms the cohort: a
+      --- stale first_hand_started (e.g. option was off, a hand finished, flag
+      --- turned on) would otherwise skip the ready requirement entirely.
+      if new_val and not was and c.hand and c.hand.status == "idle" then
+        c.first_hand_started = false
+        c.ready_players = {}
+        c._first_ready_at = nil
+      end
     end
 
     io.stderr:write("[admin] Settings updated: SB=" .. c.hand.sb_amount .. " BB=" .. c.hand.bb_amount

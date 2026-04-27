@@ -207,7 +207,7 @@ Optional:
 
 - **`queued`** — `true` if this request only stored an action for later.
 
-Common errors: **`wrong_turn`** (when `queue: false` and not your turn), **`not_seated`**, **`min_raise`**, **`cannot_raise_self`**, **`cannot_check`**, **`need_two_players`**, **`stale_action`** (when `expected_action_seq` doesn't match), **`not_ready`** (409, returned when `queue: false` on a `wait_for_ready` table whose current cohort has not dealt its first hand yet — the table is still waiting for every seat to signal ready/start; omit `queue` to have the action auto-queued for the first deal instead), **`token_required`** / **`token_invalid`**, plus the generic validation codes above.
+Common errors: **`wrong_turn`** (when `queue: false` and not your turn), **`not_seated`**, **`min_raise`**, **`cannot_raise_self`**, **`cannot_check`**, **`need_two_players`**, **`stale_action`** (when `expected_action_seq` doesn't match), **`not_ready`** (409, returned when `queue: false` on a `wait_for_ready` table whose current cohort has not dealt its first hand yet — the table is still waiting for every seat to signal ready/start; omit `queue` to have the action auto-queued for the first deal instead), **`hand_idle`** (409, internal consistency error: an action reached the engine with no active hand; refresh state and retry), **`token_required`** / **`token_invalid`**, plus the generic validation codes above.
 
 ## Python client
 

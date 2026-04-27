@@ -57,6 +57,42 @@ local function record_drop(ctx, pid, qent, reason)
   }
 end
 
+--- After `start_hand`, fold any seated player who never POSTed /ready on a
+--- `wait_for_ready` table (limbo-fold timeout path). No-op when everyone
+--- readied. Shared with main.lua when the first hand is started via a
+--- player action instead of snapshot auto-run.
+function M.after_start_hand_limbo_autofold(ctx)
+  local tbl = ctx.tbl
+  local hand = ctx.hand
+  if ctx.wait_for_ready ~= true or not ctx.ready_players or hand.status ~= "active" then
+    return
+  end
+  local readied = ctx.ready_players
+  local autofold_first_actor = false
+  for _, seat in ipairs(hand.occupied_ring or {}) do
+    local row = tbl:get_seat(seat)
+    if row and not readied[row.player_id] then
+      hand.folded[seat] = true
+      hand.pending[seat] = nil
+      hand.acted_this_street[seat] = true
+      hand:_log(row.player_id, seat, "fold", nil)
+      if hand.action_to_seat == seat then
+        autofold_first_actor = true
+      end
+      io.stderr:write(
+        "[poker-server] Auto-folding "
+          .. tostring(row.player_id)
+          .. " (seat "
+          .. tostring(seat)
+          .. ") for first hand: not in ready_players (limbo)\n"
+      )
+    end
+  end
+  if autofold_first_actor and hand.action_to_seat then
+    hand:_after_action(tbl, hand.action_to_seat)
+  end
+end
+
 --- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table, action_queue_drops?: table, wait_for_ready?: boolean, first_hand_started?: boolean, ready_players?: { [string]: boolean }, pending_join_count?: number }
 function M.run_until_human(ctx)
   local tbl = ctx.tbl
@@ -80,42 +116,7 @@ function M.run_until_human(ctx)
       return
     end
 
-    --- Limbo-fold timeout: when the gate releases via the action-timeout
-    --- path (some seated players never readied), every un-ready seat is
-    --- auto-folded for hand #1. They are still dealt cards and pay any
-    --- blinds owed by their position, but they take no action this hand.
-    --- Subsequent hands include them normally because first_hand_started
-    --- is now true and the gate is no longer enforced.
-    if ctx.wait_for_ready == true and ctx.ready_players then
-      local readied = ctx.ready_players
-      local autofold_first_actor = false
-      for _, seat in ipairs(hand.occupied_ring or {}) do
-        local row = tbl:get_seat(seat)
-        if row and not readied[row.player_id] then
-          hand.folded[seat] = true
-          hand.pending[seat] = nil
-          hand.acted_this_street[seat] = true
-          hand:_log(row.player_id, seat, "fold", nil)
-          if hand.action_to_seat == seat then
-            autofold_first_actor = true
-          end
-          io.stderr:write(
-            "[poker-server] Auto-folding "
-              .. tostring(row.player_id)
-              .. " (seat "
-              .. tostring(seat)
-              .. ") for first hand: ready timeout expired\n"
-          )
-        end
-      end
-      --- If the original first-to-act was auto-folded (or every remaining
-      --- seat folded out, leaving a single active player), advance the
-      --- engine. _after_action cascades through the ring and will award
-      --- the fold-winner pot if only one active player remains.
-      if autofold_first_actor and hand.action_to_seat then
-        hand:_after_action(tbl, hand.action_to_seat)
-      end
-    end
+    M.after_start_hand_limbo_autofold(ctx)
 
     ctx.first_hand_started = true
     --- Clear the limbo-fold timer so a future cohort (after the table empties)

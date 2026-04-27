@@ -608,11 +608,11 @@ function HandState:apply_action(tbl, player_id, action, amount)
     return nil, "not_seated"
   end
 
+  --- Starting a hand is explicit: callers must run `start_hand` (after any
+  --- server-side ready gate / limbo autofold). Implicit auto-start here
+  --- bypassed tournament-style gates and skipped first-hand autofolds.
   if self.status == "idle" then
-    local ok, err = self:start_hand(tbl)
-    if not ok then
-      return nil, err
-    end
+    return nil, "hand_idle"
   end
 
   if self.action_to_seat ~= seat then
