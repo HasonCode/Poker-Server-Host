@@ -73,6 +73,13 @@ function M.run_until_human(ctx)
       if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
         return
       end
+      local grace = tonumber(ctx.start_grace_sec) or 0
+      if grace > 0 then
+        local last_change = math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)
+        if last_change > 0 and (os.clock() - last_change) < grace then
+          return
+        end
+      end
       local seated_total = 0
       for i = 1, tbl.max_seats do
         local s = tbl:get_seat(i)

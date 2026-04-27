@@ -95,6 +95,14 @@ local function create_table_context(id, max_seats, opts)
   if action_timeout_mode ~= "eject" and action_timeout_mode ~= "fold_only" then
     action_timeout_mode = "eject"
   end
+  local start_grace_sec = opts.start_grace_sec
+  if start_grace_sec == nil then
+    start_grace_sec = tonumber(os.getenv("POKER_START_GRACE_SEC")) or 2
+  end
+  start_grace_sec = tonumber(start_grace_sec) or 2
+  if start_grace_sec < 0 then
+    start_grace_sec = 0
+  end
   if opts.with_ais then
     for i = 1, math.min(6, max_seats or 10) do
       local pid = "ai_" .. i
@@ -120,6 +128,9 @@ local function create_table_context(id, max_seats, opts)
     --- instead of re-applying. Bounded to one entry per player.
     last_action_results = {},
     pending_join_count = 0,
+    start_grace_sec = start_grace_sec,
+    _last_join_at = nil,
+    _last_start_flag_at = nil,
     _prev_hand_status = nil,
     _act_turn_key = nil,
     _act_deadline = nil,
@@ -211,6 +222,13 @@ local function ready_gate_blocks_start(ctx)
   if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
     return true
   end
+  local grace = tonumber(ctx.start_grace_sec) or 0
+  if grace > 0 then
+    local last_change = math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)
+    if last_change > 0 and (os.clock() - last_change) < grace then
+      return true
+    end
+  end
   local seated_total = 0
   for i = 1, tbl.max_seats do
     local s = tbl:get_seat(i)
@@ -254,11 +272,14 @@ local function ready_status_snapshot(ctx)
     require_start_flags = ctx.wait_for_ready == true,
     first_hand_started = ctx.first_hand_started == true,
     pending_join_count = ctx.pending_join_count or 0,
+    start_grace_sec = ctx.start_grace_sec or 0,
     ready_players = ready_list,
     waiting_players = waiting_list,
     all_ready = ctx.wait_for_ready == true
       and (not ctx.first_hand_started)
       and not ((ctx.pending_join_count or 0) > 0 and tbl and tbl:first_available_seat())
+      and not ((ctx.start_grace_sec or 0) > 0
+        and (os.clock() - math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)) < (ctx.start_grace_sec or 0))
       and (#waiting_list == 0)
       and (#seated >= 2),
   }
@@ -284,6 +305,8 @@ local function rearm_start_gate_if_empty(ctx)
   ctx._prev_hand_status = nil
   ctx._act_turn_key = nil
   ctx._act_deadline = nil
+  ctx._last_join_at = nil
+  ctx._last_start_flag_at = nil
   return true
 end
 
@@ -855,6 +878,7 @@ local function run_http()
       end
       return "error", join_http_error(err)
     end
+    c._last_join_at = os.clock()
     return "ok", join_response_success(c, player_id)
   end
 
@@ -1232,6 +1256,7 @@ local function run_http()
     else
       c.ready_players[player_id] = nil
     end
+    c._last_start_flag_at = os.clock()
 
     return {
       ok = true,
@@ -1941,6 +1966,8 @@ local function run_http()
     c.first_hand_started = false
     c.ready_players = {}
     c._prev_hand_status = nil
+    c._last_join_at = nil
+    c._last_start_flag_at = nil
 
     local default_chips = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     for i = 1, c.tbl.max_seats do
