@@ -50,7 +50,12 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 
 ## Ready gate for tournament-style tables (`wait_for_ready`)
 
-Tables can be created with the option **`require_start_flags: true`** (alias: `wait_for_ready: true`; admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server **will not deal the first hand after a table has been empty** until every seated player has explicitly signalled readiness with:
+Tables can be created with the option **`require_start_flags: true`** (alias: `wait_for_ready: true`; admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server places every seated player in a **limbo state** for the first hand of each cohort: no cards are dealt, action submissions are queued, and `hand.status` stays `idle`. The hand only deals when **either**:
+
+- every seated player (minimum 2) has signalled readiness, **or**
+- `action_timeout_sec` has elapsed since the *first* ready signal arrived **and** at least two players have readied — in which case the hand starts and any seat that never readied is **auto-folded for that one hand**.
+
+Players signal readiness with:
 
 ```http
 POST /v1/tables/:id/ready
@@ -73,10 +78,14 @@ X-Player-Token: <token from /join>
   "ready": true,
   "ready_status": {
     "wait_for_ready": true,
+    "require_start_flags": true,
     "first_hand_started": false,
     "ready_players": ["MyBot"],
     "waiting_players": ["OtherBot"],
-    "all_ready": false
+    "all_ready": false,
+    "first_ready_received": true,
+    "start_timeout_sec": 60,
+    "start_timeout_remaining_sec": 47
   },
   "table": { ... }
 }
@@ -91,7 +100,7 @@ X-Player-Token: <token from /join>
 - A player who `leave`s (or is kicked) is removed from `ready_players`; if that leave makes the table empty, all ready flags and queued actions are cleared for the next cohort.
 - **Admin `POST /admin/api/tables/:id/reset`** also re-arms the gate — all ready flags are cleared and a fresh round of ready signals is required.
 
-The flag is surfaced on every snapshot as `table.ready` and on `GET /v1/tables` as `wait_for_ready` / `first_hand_started`, so clients can poll to see who is still holding things up.
+The flag is surfaced on every snapshot as `table.ready` and on `GET /v1/tables` as `wait_for_ready` / `first_hand_started`, so clients can poll to see who is still holding things up. Use `start_timeout_remaining_sec` to render a countdown — once it hits zero the gate releases and any non-ready seat is folded for the first hand. Late joiners do **not** reset the timer; if they want to play hand #1 they must ready up before the existing window closes.
 
 ---
 

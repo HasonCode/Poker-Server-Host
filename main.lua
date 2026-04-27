@@ -131,6 +131,13 @@ local function create_table_context(id, max_seats, opts)
     start_grace_sec = start_grace_sec,
     _last_join_at = nil,
     _last_start_flag_at = nil,
+    --- Wall-clock time (os.clock seconds) when the first /ready signal of the
+    --- current cohort arrived. Used to drive the limbo-fold timeout: once this
+    --- is set, the first hand will force-start after action_timeout_sec even
+    --- if some seated players have not yet readied. Cleared on hand start,
+    --- when the table empties, when the last ready is rescinded, or on admin
+    --- reset.
+    _first_ready_at = nil,
     _prev_hand_status = nil,
     _act_turn_key = nil,
     _act_deadline = nil,
@@ -205,9 +212,38 @@ local function clear_player_action_state(ctx, player_id)
   end
 end
 
---- True iff the first hand is still blocked waiting for seated players to
---- signal ready. Returns false once the first hand has started (the gate is
---- only enforced before hand #1). When false, hands auto-start normally.
+--- Tally seated players and how many of them have readied this cohort. A
+--- single helper keeps the gate and the snapshot in lock-step.
+local function tally_ready(ctx)
+  local tbl = ctx and ctx.tbl
+  local seated = {}
+  local ready = {}
+  local waiting = {}
+  if not tbl then
+    return seated, ready, waiting
+  end
+  for i = 1, tbl.max_seats do
+    local s = tbl:get_seat(i)
+    if s then
+      local pid = s.player_id
+      seated[#seated + 1] = pid
+      if ctx.ready_players and ctx.ready_players[pid] then
+        ready[#ready + 1] = pid
+      else
+        waiting[#waiting + 1] = pid
+      end
+    end
+  end
+  return seated, ready, waiting
+end
+
+--- True iff the first hand of the current cohort is still blocked because
+--- not every seated player has signalled ready. Returns false once the first
+--- hand has started (the gate is only enforced before hand #1) or once the
+--- limbo-fold timeout (= action_timeout_sec measured from the first ready
+--- signal) has elapsed and at least two players have readied. While the gate
+--- is active, joined players sit in limbo: actions are queued and no cards
+--- are dealt.
 local function ready_gate_blocks_start(ctx)
   if not ctx or ctx.wait_for_ready ~= true then
     return false
@@ -219,54 +255,90 @@ local function ready_gate_blocks_start(ctx)
   if not tbl then
     return false
   end
-  if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
-    return true
-  end
-  local grace = tonumber(ctx.start_grace_sec) or 0
-  if grace > 0 then
-    local last_change = math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)
-    if last_change > 0 and (os.clock() - last_change) < grace then
-      return true
-    end
-  end
-  local seated_total = 0
-  for i = 1, tbl.max_seats do
-    local s = tbl:get_seat(i)
-    if s then
-      seated_total = seated_total + 1
-      if not (ctx.ready_players and ctx.ready_players[s.player_id]) then
-        return true
-      end
-    end
-  end
-  --- Need at least two players even when everyone present is ready.
+
+  local seated, ready_list = tally_ready(ctx)
+  local seated_total = #seated
+  local ready_count = #ready_list
+
+  --- Need at least two seated players to ever start. A lone seated player
+  --- waits indefinitely -- regardless of ready state -- because poker needs
+  --- two non-folded participants for a hand.
   if seated_total < 2 then
     return true
   end
-  return false
+
+  if ready_count == seated_total then
+    --- Everyone seated has confirmed ready. Honour any pending-join settle
+    --- (so a still-being-seated player isn't skipped) and the small
+    --- "start grace" window so back-to-back joins/readies converge before
+    --- we deal hand #1.
+    if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
+      return true
+    end
+    local grace = tonumber(ctx.start_grace_sec) or 0
+    if grace > 0 then
+      local last_change = math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)
+      if last_change > 0 and (os.clock() - last_change) < grace then
+        return true
+      end
+    end
+    return false
+  end
+
+  --- Some seated players still haven't readied. Block by default; the only
+  --- way to start without unanimous readies is the limbo-fold timeout: once
+  --- the action_timeout_sec window since the first ready has elapsed and at
+  --- least two players have readied, force-start the hand. Players who
+  --- never readied are auto-folded for that first hand (handled in ai.lua
+  --- right after start_hand).
+  if ctx._first_ready_at then
+    local timeout = tonumber(ctx.action_timeout_sec) or 0
+    if timeout > 0 and ready_count >= 2 then
+      local elapsed = os.clock() - ctx._first_ready_at
+      if elapsed >= timeout then
+        --- Even on timeout, respect any in-flight joins/grace so we don't
+        --- race against a player who is mid-handshake. They won't get an
+        --- extension once the timer is up, but the snapshot batch settles.
+        if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
+          return true
+        end
+        return false
+      end
+    end
+  end
+
+  return true
 end
 
 local function ready_status_snapshot(ctx)
   if not ctx then return nil end
-  local seated = {}
   local tbl = ctx.tbl
-  if tbl then
-    for i = 1, tbl.max_seats do
-      local s = tbl:get_seat(i)
-      if s then
-        seated[#seated + 1] = s.player_id
-      end
+  local seated, ready_list, waiting_list = tally_ready(ctx)
+
+  --- Compute the time remaining on the limbo-fold timer (if active). When
+  --- nil, no timer is running yet (no readies received) or it has already
+  --- elapsed; UI clients can use this to render a countdown.
+  local timeout = tonumber(ctx.action_timeout_sec) or 0
+  local remaining_sec = nil
+  if ctx.wait_for_ready == true
+      and not ctx.first_hand_started
+      and ctx._first_ready_at
+      and timeout > 0 then
+    local r = timeout - (os.clock() - ctx._first_ready_at)
+    if r < 0 then r = 0 end
+    remaining_sec = math.floor(r + 0.5)
+  end
+
+  local pending_block = (ctx.pending_join_count or 0) > 0 and tbl and tbl:first_available_seat()
+  local grace = ctx.start_grace_sec or 0
+  local grace_block = false
+  if grace > 0 then
+    local last_change = math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)
+    if last_change > 0 and (os.clock() - last_change) < grace then
+      grace_block = true
     end
   end
-  local ready_list = {}
-  local waiting_list = {}
-  for _, pid in ipairs(seated) do
-    if ctx.ready_players and ctx.ready_players[pid] then
-      ready_list[#ready_list + 1] = pid
-    else
-      waiting_list[#waiting_list + 1] = pid
-    end
-  end
+
   return {
     wait_for_ready = ctx.wait_for_ready == true,
     require_start_flags = ctx.wait_for_ready == true,
@@ -275,13 +347,21 @@ local function ready_status_snapshot(ctx)
     start_grace_sec = ctx.start_grace_sec or 0,
     ready_players = ready_list,
     waiting_players = waiting_list,
+    --- True when every seated player has voluntarily readied (no timeout
+    --- needed). Pending joins and grace still apply.
     all_ready = ctx.wait_for_ready == true
       and (not ctx.first_hand_started)
-      and not ((ctx.pending_join_count or 0) > 0 and tbl and tbl:first_available_seat())
-      and not ((ctx.start_grace_sec or 0) > 0
-        and (os.clock() - math.max(ctx._last_join_at or 0, ctx._last_start_flag_at or 0)) < (ctx.start_grace_sec or 0))
+      and (not pending_block)
+      and (not grace_block)
       and (#waiting_list == 0)
       and (#seated >= 2),
+    --- Limbo-fold timer fields. start_timeout_sec is the maximum window
+    --- (= action_timeout_sec) and start_timeout_remaining_sec ticks down
+    --- once the first /ready arrives. When it hits zero, the hand starts
+    --- and any seat in waiting_players is auto-folded for hand #1.
+    start_timeout_sec = (ctx.wait_for_ready == true) and timeout or 0,
+    start_timeout_remaining_sec = remaining_sec,
+    first_ready_received = ctx._first_ready_at ~= nil,
   }
 end
 
@@ -307,6 +387,7 @@ local function rearm_start_gate_if_empty(ctx)
   ctx._act_deadline = nil
   ctx._last_join_at = nil
   ctx._last_start_flag_at = nil
+  ctx._first_ready_at = nil
   return true
 end
 
@@ -1253,8 +1334,22 @@ local function run_http()
     c.ready_players = c.ready_players or {}
     if ready_flag then
       c.ready_players[player_id] = true
+      --- Start the limbo-fold countdown on the very first ready signal of
+      --- this cohort. Subsequent readies do not reset it; if a join arrives
+      --- after the timer started the new player still gets the remaining
+      --- window to ready up. The timer is cleared when the hand finally
+      --- starts, when the table empties, or when the last ready is rescinded.
+      if not c._first_ready_at and not c.first_hand_started then
+        c._first_ready_at = os.clock()
+      end
     else
       c.ready_players[player_id] = nil
+      --- If the un-ready signal removed the last ready flag, cancel the
+      --- limbo-fold timer so we don't auto-fold an empty cohort the moment
+      --- the next player readies.
+      if next(c.ready_players) == nil then
+        c._first_ready_at = nil
+      end
     end
     c._last_start_flag_at = os.clock()
 
@@ -1968,6 +2063,7 @@ local function run_http()
     c._prev_hand_status = nil
     c._last_join_at = nil
     c._last_start_flag_at = nil
+    c._first_ready_at = nil
 
     local default_chips = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     for i = 1, c.tbl.max_seats do

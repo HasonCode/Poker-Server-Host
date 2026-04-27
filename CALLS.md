@@ -202,7 +202,14 @@ Stand up from a table. If a hand is active, the player is auto-folded first.
 
 ### `POST /v1/tables/:id/ready`
 
-Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with `require_start_flags: true` (alias: `wait_for_ready: true`). A cohort begins when players sit at a table that was previously empty. That first hand does not deal until every seated player has signalled readiness (and ≥ 2 players are seated). All subsequent hands deal automatically until the table becomes empty again. On tables without this option, play auto-starts when two players are seated; this call is still accepted for consistency but does not affect dealing.
+Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with `require_start_flags: true` (alias: `wait_for_ready: true`). A cohort begins when players sit at a table that was previously empty.
+
+While the gate is active, every seated player is in **limbo**: no cards are dealt, action submissions are queued, and `hand.status` stays `idle`. The gate releases when **either**:
+
+- every seated player (≥ 2) has signalled readiness, **or**
+- `action_timeout_sec` has elapsed since the *first* `/ready` arrived **and** at least two seats have readied — in which case the hand starts and any seat that never readied is **auto-folded for that one hand only**. They are dealt cards and pay any blinds owed by their position, but they take no action and forfeit the hand. From the second hand of the cohort onward they participate normally.
+
+All subsequent hands deal automatically until the table becomes empty again. On tables without this option, play auto-starts when two players are seated; this call is still accepted for consistency but does not affect dealing. The snapshot's `ready_status.start_timeout_remaining_sec` ticks the live countdown; clients can render it as a deadline.
 
 `POST /v1/tables/:id/start` and `POST /v1/tables/:id/start-flag` are aliases with the same request body and response.
 
@@ -226,7 +233,11 @@ Signal that a seated player is ready for the **first hand of the current table c
   "ready": true,
   "ready_status": {
     "wait_for_ready": true,
+    "require_start_flags": true,
     "first_hand_started": false,
+    "first_ready_received": true,
+    "start_timeout_sec": 60,
+    "start_timeout_remaining_sec": 47,
     "ready_players": ["Alice"],
     "waiting_players": ["Bob"],
     "all_ready": false
