@@ -165,18 +165,25 @@ function HandState:_reset_street_betting()
   end
 end
 
-function HandState:_first_postflop_actor()
-  local s = next_in_ring(self.occupied_ring, self.button_seat)
+--- First seat clockwise after the button who can actually act on a postflop
+--- street: not folded and with chips remaining (all-in players cannot act,
+--- so their turn is automatically skipped). Returns nil if no one can act.
+function HandState:_first_postflop_actor(tbl)
+  local start = next_in_ring(self.occupied_ring, self.button_seat)
+  local s = start
   while s do
     if not self.folded[s] then
-      return s
+      local st = tbl and tbl:get_seat(s)
+      if st and st.stack > 0 then
+        return s
+      end
     end
     s = next_in_ring(self.occupied_ring, s)
-    if s == next_in_ring(self.occupied_ring, self.button_seat) then
+    if s == start then
       break
     end
   end
-  return self.occupied_ring[1]
+  return nil
 end
 
 function HandState:_rebuild_pending_after_raise(tbl, raiser_seat)
@@ -213,12 +220,35 @@ function HandState:_pending_empty()
   return true
 end
 
+function HandState:_seat_needs_action(tbl, seat)
+  if self.folded[seat] then
+    self.pending[seat] = nil
+    return false
+  end
+  local st = tbl:get_seat(seat)
+  if not st or st.stack <= 0 then
+    self.pending[seat] = nil
+    return false
+  end
+  local c = self.contribution[seat] or 0
+  if c < self.current_bet then
+    return true
+  end
+  if not self.acted_this_street[seat] then
+    return true
+  end
+  -- A pending flag is only meaningful while the player still owes a response.
+  -- If they have already acted and matched the current bet, do not loop the
+  -- turn back to them because of stale pending state.
+  if self.pending[seat] then
+    self.pending[seat] = nil
+  end
+  return false
+end
+
 function HandState:_round_complete(tbl)
   -- Everyone matched or all-in; no one pending response to a raise
   if not self:_all_matched(tbl) then
-    return false
-  end
-  if not self:_pending_empty() then
     return false
   end
   -- Every non-folded player with chips must have had a turn this street.
@@ -227,12 +257,12 @@ function HandState:_round_complete(tbl)
   -- (action would then land on the same seat again as the first postflop
   -- actor on the next street). Also preserves the BB option preflop.
   for _, s in ipairs(self.occupied_ring) do
-    if not self.folded[s] then
-      local st = tbl:get_seat(s)
-      if st and st.stack > 0 and not self.acted_this_street[s] then
-        return false
-      end
+    if self:_seat_needs_action(tbl, s) then
+      return false
     end
+  end
+  if not self:_pending_empty() then
+    return false
   end
   return true
 end
@@ -365,39 +395,46 @@ function HandState:_finish_hand(tbl)
 end
 
 function HandState:_advance_street_or_complete(tbl)
-  if self:_count_active() <= 1 then
-    self:_award_fold_winner(tbl)
-    self:_finish_hand(tbl)
-    self:_reset_between_hands()
-    return
-  end
+  --- Advance through as many streets as needed. If every remaining non-folded
+  --- player is all-in, there's no more betting — burn/deal each remaining
+  --- street with no actor and go straight to showdown.
+  while true do
+    if self:_count_active() <= 1 then
+      self:_award_fold_winner(tbl)
+      self:_finish_hand(tbl)
+      self:_reset_between_hands()
+      return
+    end
 
-  if self.street == "preflop" then
-    self.street = "flop"
-    deck_mod.draw(self.deck, 1) -- burn
-    local flop = deck_mod.draw(self.deck, 3)
-    self.community = flop
-  elseif self.street == "flop" then
-    self.street = "turn"
-    deck_mod.draw(self.deck, 1) -- burn
-    local turn = deck_mod.draw(self.deck, 1)
-    self.community[4] = turn[1]
-  elseif self.street == "turn" then
-    self.street = "river"
-    deck_mod.draw(self.deck, 1) -- burn
-    local river = deck_mod.draw(self.deck, 1)
-    self.community[5] = river[1]
-  elseif self.street == "river" then
-    self:_award_showdown(tbl)
-    self:_finish_hand(tbl)
-    self:_reset_between_hands()
-    return
-  end
+    if self.street == "preflop" then
+      self.street = "flop"
+      deck_mod.draw(self.deck, 1) -- burn
+      local flop = deck_mod.draw(self.deck, 3)
+      self.community = flop
+    elseif self.street == "flop" then
+      self.street = "turn"
+      deck_mod.draw(self.deck, 1) -- burn
+      local turn = deck_mod.draw(self.deck, 1)
+      self.community[4] = turn[1]
+    elseif self.street == "turn" then
+      self.street = "river"
+      deck_mod.draw(self.deck, 1) -- burn
+      local river = deck_mod.draw(self.deck, 1)
+      self.community[5] = river[1]
+    elseif self.street == "river" then
+      self:_award_showdown(tbl)
+      self:_finish_hand(tbl)
+      self:_reset_between_hands()
+      return
+    end
 
-  self:_reset_street_betting()
-  self.action_to_seat = self:_first_postflop_actor()
-  while self.action_to_seat and self.folded[self.action_to_seat] do
-    self.action_to_seat = next_in_ring(self.occupied_ring, self.action_to_seat)
+    self:_reset_street_betting()
+    self.action_to_seat = self:_first_postflop_actor(tbl)
+    if self.action_to_seat then
+      return
+    end
+    --- No one has chips to act (everyone remaining is all-in). Keep dealing
+    --- the next street until we reach showdown.
   end
 end
 
@@ -550,15 +587,9 @@ function HandState:_after_action(tbl, acted_seat)
   local guard = 0
   while s and guard < 32 do
     guard = guard + 1
-    if not self.folded[s] then
-      local st = tbl:get_seat(s)
-      if st and st.stack > 0 then
-        local c = self.contribution[s] or 0
-        if c < self.current_bet or self.pending[s] or not self.acted_this_street[s] then
-          self.action_to_seat = s
-          return
-        end
-      end
+    if self:_seat_needs_action(tbl, s) then
+      self.action_to_seat = s
+      return
     end
     s = next_in_ring(self.occupied_ring, s)
     if s == start then

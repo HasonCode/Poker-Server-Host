@@ -200,6 +200,47 @@ Stand up from a table. If a hand is active, the player is auto-folded first.
 
 ---
 
+### `POST /v1/tables/:id/ready`
+
+Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with `wait_for_ready: true`. A cohort begins when players sit at a table that was previously empty. That first hand does not deal until every seated player has signalled readiness (and ≥ 2 players are seated). All subsequent hands deal automatically until the table becomes empty again. On tables without `wait_for_ready`, play auto-starts when two players are seated; this call is still accepted for consistency but does not affect dealing.
+
+`POST /v1/tables/:id/start` is an alias with the same request body and response.
+
+| Python client | `c.set_ready("tournament", player_id="Alice")` or `c.start_table("tournament", player_id="Alice")`; pass `ready=False` to withdraw |
+|---|---|
+| Auth header | **Required** (`X-Player-Token` matching `player_id`). Missing → `401 token_required`. Mismatched → `403 token_invalid`. |
+
+**Request body**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `player_id` | string | yes | Must be seated |
+| `ready` | boolean | no | Defaults to `true`. Pass `false` to withdraw a previous signal |
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "player_id": "Alice",
+  "ready": true,
+  "ready_status": {
+    "wait_for_ready": true,
+    "first_hand_started": false,
+    "ready_players": ["Alice"],
+    "waiting_players": ["Bob"],
+    "all_ready": false
+  },
+  "table": { "...snapshot..." }
+}
+```
+
+Also available on every table snapshot as `table.ready`, so bots can poll `GET .../state` to watch progress without hammering this endpoint.
+
+Common errors: `not_seated` (404), `token_required` (401), `token_invalid` (403), `invalid_player` (400).
+
+---
+
 ### `POST /v1/tables/:id/actions`
 
 Submit a poker action.
@@ -218,6 +259,8 @@ Submit a poker action.
 | `queue` | boolean | no | `true` = always queue; `false` = error if not your turn; omit = auto-queue when not your turn |
 | `client_action_id` | string | no | Idempotency key, ≤ 128 chars. The server caches the response per `(player_id, id)` for 60 s; replay with the same id returns the cached response instead of re-applying. |
 | `expected_action_seq` | integer | no | Assert the client's view of `hand.action_seq`. Mismatch when the action would apply now → `stale_action` (409) with `details.current_seq`. Ignored when the action would be queued. |
+
+**Additional error on `wait_for_ready` tables:** `not_ready` (409) is returned when the request explicitly sets `queue: false` and the current table cohort is still waiting for every seat to signal ready/start for its first hand. Omit `queue` (or pass `queue: true`) to have the action auto-queued for the first deal instead. See `POST /v1/tables/:id/ready`.
 
 **Response**
 

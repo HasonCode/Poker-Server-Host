@@ -57,7 +57,7 @@ local function record_drop(ctx, pid, qent, reason)
   }
 end
 
---- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table, action_queue_drops?: table }
+--- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table, action_queue_drops?: table, wait_for_ready?: boolean, first_hand_started?: boolean, ready_players?: { [string]: boolean } }
 function M.run_until_human(ctx)
   local tbl = ctx.tbl
   local hand = ctx.hand
@@ -66,6 +66,24 @@ function M.run_until_human(ctx)
   local max_steps = 500
 
   if hand.status == "idle" then
+    --- Honor the "wait until every seated player signals ready" gate before
+    --- the first hand of each table cohort. The gate re-arms only after the
+    --- table has become completely empty.
+    if ctx.wait_for_ready == true and not ctx.first_hand_started then
+      local seated_total = 0
+      for i = 1, tbl.max_seats do
+        local s = tbl:get_seat(i)
+        if s then
+          seated_total = seated_total + 1
+          if not (ctx.ready_players and ctx.ready_players[s.player_id]) then
+            return
+          end
+        end
+      end
+      if seated_total < 2 then
+        return
+      end
+    end
     local first, perr = hand:peek_first_actor(tbl)
     if not first then
       return
@@ -75,6 +93,7 @@ function M.run_until_human(ctx)
       io.stderr:write("[poker-server] auto-start failed: " .. tostring(serr) .. "\n")
       return
     end
+    ctx.first_hand_started = true
   end
 
   for _ = 1, max_steps do
@@ -111,11 +130,22 @@ function M.run_until_human(ctx)
           and hand.status == "active"
           and qent.street
           and qent.street ~= hand.street
+        local stale_seq = qent.expected_action_seq
+          and hand.status == "active"
+          and hand.seq ~= qent.expected_action_seq
         if stale then
           queue[pid] = nil
           record_drop(ctx, pid, qent, "stale_street")
           io.stderr:write(
             "[poker-server] Queued action dropped (betting round changed) for "
+              .. tostring(pid)
+              .. "\n"
+          )
+        elseif stale_seq then
+          queue[pid] = nil
+          record_drop(ctx, pid, qent, "stale_action")
+          io.stderr:write(
+            "[poker-server] Queued action dropped (stale action sequence) for "
               .. tostring(pid)
               .. "\n"
           )

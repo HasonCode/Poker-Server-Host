@@ -344,3 +344,70 @@ class PokerClient:
         return self._request_json(
             "POST", self._path_table(table_id, "actions"), body
         )
+
+    def set_ready(
+        self,
+        table_id: str,
+        *,
+        player_id: str,
+        ready: bool = True,
+    ) -> Any:
+        """
+        Signal readiness/start confirmation for the first hand of the current
+        table cohort on a table configured with ``wait_for_ready``. A cohort
+        begins when players sit at a table that was previously empty. Pass
+        ``ready=False`` to withdraw a previous signal.
+
+        On tables that were created without ``wait_for_ready`` this call is
+        accepted (the server tracks the flag) but the table deals normally
+        regardless. After the cohort's first hand has been dealt, subsequent
+        calls are accepted for consistency but do not affect dealing until
+        the table becomes empty and the next cohort begins.
+
+        Requires the ``X-Player-Token`` obtained from :meth:`join_table` and
+        must match ``player_id``.
+        """
+        body = {"player_id": player_id, "ready": bool(ready)}
+        return self._request_json(
+            "POST", self._path_table(table_id, "ready"), body
+        )
+
+    def start_table(
+        self,
+        table_id: str,
+        *,
+        player_id: str,
+        ready: bool = True,
+    ) -> Any:
+        """Alias for :meth:`set_ready` using the server's ``/start`` route."""
+        body = {"player_id": player_id, "ready": bool(ready)}
+        return self._request_json(
+            "POST", self._path_table(table_id, "start"), body
+        )
+
+    def wait_for_hand(
+        self,
+        table_id: str,
+        *,
+        poll_interval: float = 0.5,
+        timeout: Optional[float] = None,
+    ) -> Any:
+        """
+        Block until the current table cohort's first hand has been dealt
+        (``hand.status == "active"``). Useful for bots on ``wait_for_ready``
+        tables that want to ``set_ready`` and then sit idle until cards are out.
+
+        Returns the most recent table state snapshot. Raises
+        :class:`TimeoutError` if *timeout* seconds elapse first.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            state = self.get_table_state(table_id)
+            hand = state.get("hand") or {}
+            if hand.get("status") == "active":
+                return state
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for first hand of table {table_id!r}"
+                )
+            time.sleep(poll_interval)

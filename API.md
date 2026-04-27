@@ -40,6 +40,8 @@ Non-success responses use a JSON object of the form:
 | GET | `/health` | Liveness / service metadata |
 | GET | `/v1/tables/{table_id}/state` | Snapshot: seats, stacks, hand |
 | POST | `/v1/tables/{table_id}/join` | Take a seat (see below) |
+| POST | `/v1/tables/{table_id}/ready` | Signal readiness for the first hand of the current table cohort (`wait_for_ready`) |
+| POST | `/v1/tables/{table_id}/start` | Alias for `/ready` for clients that model this as a start request |
 | POST | `/v1/tables/{table_id}/actions` | Submit an action (see below) |
 
 Unknown paths return **404** with `code: "not_found"`.
@@ -79,6 +81,47 @@ Optional explicit seat:
 ```
 
 Common errors: **`seat_taken`** (409), **`table_full`** (409), **`invalid_seat`** (400).
+
+### POST `/v1/tables/{table_id}/ready`
+
+Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with **`wait_for_ready: true`**. A cohort begins when players sit at a table that was previously empty. That first hand does not start until every seated player (minimum 2) has signalled ready; all subsequent hands for that cohort deal automatically. If the table becomes empty again, the gate re-arms for the next cohort. On tables without the option, play auto-starts as soon as two players are seated; this endpoint is still accepted but has no effect on dealing.
+
+`POST /v1/tables/{table_id}/start` is an alias for this endpoint.
+
+**Authentication:** `X-Player-Token` header is required and must match `player_id` (same auth model as `POST /actions`).
+
+Body:
+
+```json
+{ "player_id": "alice", "ready": true }
+```
+
+- **`player_id`** — Must already be seated at this table.
+- **`ready`** — Optional boolean, defaults to `true`. Pass `false` to withdraw a previous signal.
+
+**200** response:
+
+```json
+{
+  "ok": true,
+  "player_id": "alice",
+  "ready": true,
+  "ready_status": {
+    "wait_for_ready": true,
+    "first_hand_started": false,
+    "ready_players": ["alice"],
+    "waiting_players": ["bob"],
+    "all_ready": false
+  },
+  "table": { "table_id": "...", "seats": [...], "hand": {...}, "ready": {...} }
+}
+```
+
+- `ready.ready_players` / `ready.waiting_players` are also surfaced inside every `table` snapshot (`table.ready`) on other endpoints, so bots can poll without spamming the ready endpoint.
+- **`first_hand_started`** flips to `true` as soon as the cohort's first hand is dealt. It resets only when the table becomes completely empty or when `POST /admin/api/tables/{id}/reset` is called.
+- Leaving the table (`POST /leave` / admin kick) removes the player from `ready_players`. A remaining seat that was previously "all ready" will see the gate re-arm until it reconfirms (or another player joins and signals).
+
+Common errors: **`not_seated`** (404), **`token_required`** (401), **`token_invalid`** (403), **`invalid_player`** (400).
 
 ### POST `/v1/tables/{table_id}/actions`
 
@@ -147,7 +190,7 @@ Optional:
 
 - **`queued`** — `true` if this request only stored an action for later.
 
-Common errors: **`wrong_turn`** (when `queue: false` and not your turn), **`not_seated`**, **`min_raise`**, **`cannot_raise_self`**, **`cannot_check`**, **`need_two_players`**, **`stale_action`** (when `expected_action_seq` doesn't match), **`token_required`** / **`token_invalid`**, plus the generic validation codes above.
+Common errors: **`wrong_turn`** (when `queue: false` and not your turn), **`not_seated`**, **`min_raise`**, **`cannot_raise_self`**, **`cannot_check`**, **`need_two_players`**, **`stale_action`** (when `expected_action_seq` doesn't match), **`not_ready`** (409, returned when `queue: false` on a `wait_for_ready` table whose current cohort has not dealt its first hand yet — the table is still waiting for every seat to signal ready/start; omit `queue` to have the action auto-queued for the first deal instead), **`token_required`** / **`token_invalid`**, plus the generic validation codes above.
 
 ## Python client
 
@@ -166,6 +209,11 @@ try:
     # print(c.join_table("demo", seat=2, player_id="carol", chips=500))
     print(c.send_action("demo", player_id="carol", action="check"))
     print(c.send_action("demo", player_id="carol", action="raise", amount=20))
+
+    # For tables created with `wait_for_ready`:
+    # print(c.set_ready("tournament", player_id="carol"))
+    # or: print(c.start_table("tournament", player_id="carol"))
+    # print(c.wait_for_hand("tournament", timeout=60))
 except PokerError as e:
     print(e.status_code, e.api_code, e.message, e.details)
 except TransportError as e:

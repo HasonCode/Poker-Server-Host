@@ -53,6 +53,7 @@ local function action_http_error(err, extra)
     min_raise = { "400 Bad Request", "min_raise", "Raise does not meet the minimum raise size." },
     cannot_raise_self = { "400 Bad Request", "cannot_raise_self", "You cannot raise again until another player has raised." },
     stale_action = { "409 Conflict", "stale_action", "expected_action_seq does not match current hand.action_seq; refresh state and resubmit." },
+    not_ready = { "409 Conflict", "not_ready", "This table is waiting for every seated player to POST /v1/tables/{id}/ready before dealing the first hand." },
     token_required = { "401 Unauthorized", "token_required", "X-Player-Token header required for this action (returned by POST /v1/tables/{id}/join)." },
     token_invalid = { "403 Forbidden", "token_invalid", "X-Player-Token does not match this player_id at this table." },
   }
@@ -131,6 +132,13 @@ local function create_table_context(id, max_seats, opts)
     action_timeout_mode = action_timeout_mode,
     bust_counts = {}, -- player_id -> times reached 0 chips at end of hand (eject or rebuy)
     hidden = opts.hidden == true, -- if true, omitted from GET /v1/tables public list
+    --- When true, the first hand after the table has been empty will not start
+    --- until every seated player has signalled ready/start. Once that first
+    --- hand has started, subsequent hands proceed automatically until the
+    --- table becomes empty again. Admin reset also re-arms the wait.
+    wait_for_ready = opts.wait_for_ready == true,
+    first_hand_started = false,
+    ready_players = {}, -- player_id -> true
   }
 end
 
@@ -180,6 +188,96 @@ local function clear_player_action_state(ctx, player_id)
   if ctx.last_action_results then
     ctx.last_action_results[player_id] = nil
   end
+  if ctx.ready_players then
+    ctx.ready_players[player_id] = nil
+  end
+end
+
+--- True iff the first hand is still blocked waiting for seated players to
+--- signal ready. Returns false once the first hand has started (the gate is
+--- only enforced before hand #1). When false, hands auto-start normally.
+local function ready_gate_blocks_start(ctx)
+  if not ctx or ctx.wait_for_ready ~= true then
+    return false
+  end
+  if ctx.first_hand_started then
+    return false
+  end
+  local tbl = ctx.tbl
+  if not tbl then
+    return false
+  end
+  local seated_total = 0
+  for i = 1, tbl.max_seats do
+    local s = tbl:get_seat(i)
+    if s then
+      seated_total = seated_total + 1
+      if not (ctx.ready_players and ctx.ready_players[s.player_id]) then
+        return true
+      end
+    end
+  end
+  --- Need at least two players even when everyone present is ready.
+  if seated_total < 2 then
+    return true
+  end
+  return false
+end
+
+local function ready_status_snapshot(ctx)
+  if not ctx then return nil end
+  local seated = {}
+  local tbl = ctx.tbl
+  if tbl then
+    for i = 1, tbl.max_seats do
+      local s = tbl:get_seat(i)
+      if s then
+        seated[#seated + 1] = s.player_id
+      end
+    end
+  end
+  local ready_list = {}
+  local waiting_list = {}
+  for _, pid in ipairs(seated) do
+    if ctx.ready_players and ctx.ready_players[pid] then
+      ready_list[#ready_list + 1] = pid
+    else
+      waiting_list[#waiting_list + 1] = pid
+    end
+  end
+  return {
+    wait_for_ready = ctx.wait_for_ready == true,
+    first_hand_started = ctx.first_hand_started == true,
+    ready_players = ready_list,
+    waiting_players = waiting_list,
+    all_ready = ctx.wait_for_ready == true
+      and (not ctx.first_hand_started)
+      and (#waiting_list == 0)
+      and (#seated >= 2),
+  }
+end
+
+local function rearm_start_gate_if_empty(ctx)
+  if not ctx or not ctx.tbl or ctx.tbl:occupied_count() > 0 then
+    return false
+  end
+
+  --- A completely empty table starts a new cohort. If wait_for_ready is on,
+  --- the next cohort must explicitly signal before its first hand; if it is
+  --- off, normal auto-start resumes as soon as two seats are occupied.
+  if ctx.hand and ctx.hand.status ~= "idle" then
+    ctx.hand:_reset_between_hands()
+    ctx.hand.last_button_seat = nil
+  end
+  ctx.first_hand_started = false
+  ctx.ready_players = {}
+  ctx.action_queue = {}
+  ctx.action_queue_drops = {}
+  ctx.last_action_results = {}
+  ctx._prev_hand_status = nil
+  ctx._act_turn_key = nil
+  ctx._act_deadline = nil
+  return true
 end
 
 math.randomseed(os.time() + math.floor(os.clock() * 10000))
@@ -334,11 +432,17 @@ end
 --- current hand) apply after the next start_hand; active queues are tagged
 --- with hand.street so precached actions cannot fire on a later betting
 --- round of the same hand.
-local function queue_entry(act, amt, hand, in_current_hand)
+local function queue_entry(act, amt, hand, in_current_hand, expected_seq)
+  local entry
   if hand.status == "idle" or not in_current_hand then
-    return { action = act, amount = amt, while_idle = true }
+    entry = { action = act, amount = amt, while_idle = true }
+  else
+    entry = { action = act, amount = amt, street = hand.street }
   end
-  return { action = act, amount = amt, street = hand.street }
+  if hand.status == "active" and expected_seq ~= nil then
+    entry.expected_action_seq = tonumber(expected_seq)
+  end
+  return entry
 end
 
 --- @return "applied"|"queued"|nil, err [, err_details]
@@ -390,8 +494,19 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
     return nil
   end
 
+  --- While the "first hand" ready gate is still blocking, actions cannot
+  --- force the hand to start. Queue them so they fire automatically on the
+  --- deal, or refuse them if the caller explicitly asked for non-queued.
+  if hand.status == "idle" and ready_gate_blocks_start(ctx) then
+    if qfalse then
+      return nil, "not_ready"
+    end
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand, expected_seq)
+    return "queued"
+  end
+
   if q and hand.status == "idle" then
-    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand, expected_seq)
     return "queued"
   end
 
@@ -405,9 +520,10 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
       if not ok then
         return nil, err2
       end
+      ctx.action_queue[player_id] = nil
       return "applied"
     end
-    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand, expected_seq)
     return "queued"
   end
 
@@ -421,9 +537,10 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
       if not ok then
         return nil, err2
       end
+      ctx.action_queue[player_id] = nil
       return "applied"
     end
-    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand, expected_seq)
     return "queued"
   end
 
@@ -437,7 +554,7 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
     if strict_queue then
       return nil, "wrong_turn"
     end
-    ctx.action_queue[player_id] = queue_entry(act, amt, hand, false)
+    ctx.action_queue[player_id] = queue_entry(act, amt, hand, false, expected_seq)
     return "queued"
   end
 
@@ -450,6 +567,7 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
     if not ok then
       return nil, err2
     end
+    ctx.action_queue[player_id] = nil
     return "applied"
   end
 
@@ -459,7 +577,7 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
   if strict_queue and hand.status == "active" then
     return nil, "wrong_turn"
   end
-  ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand)
+  ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand, expected_seq)
   return "queued"
 end
 
@@ -479,6 +597,7 @@ local function eject_action_timeout(ctx, player_id, seat)
   ctx.tbl:leave_seat(seat)
   clear_player_action_state(ctx, player_id)
   remove_player_token(ctx, player_id)
+  rearm_start_gate_if_empty(ctx)
   if ctx.running_bots and ctx.running_bots[player_id] then
     kill_bot(ctx.running_bots[player_id].pid)
     ctx.running_bots[player_id] = nil
@@ -579,6 +698,7 @@ local function handle_zero_chips(ctx)
       end
     end
   end
+  rearm_start_gate_if_empty(ctx)
 end
 
 local function table_snapshot(ctx)
@@ -587,8 +707,15 @@ local function table_snapshot(ctx)
     ctx.action_queue = {}
     handle_zero_chips(ctx)
   end
+  if h.status == "active" then
+    --- Defensive: any code path that actually dealt a hand clears the
+    --- "wait for ready" gate, even if start_hand was called somewhere other
+    --- than ai.run_until_human.
+    ctx.first_hand_started = true
+  end
   ctx._prev_hand_status = h.status
   check_action_timeout(ctx)
+  rearm_start_gate_if_empty(ctx)
   ai.run_until_human(ctx)
   local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue, ctx.action_queue_drops)
   snap.zero_chips = ctx.zero_chips
@@ -596,6 +723,7 @@ local function table_snapshot(ctx)
   snap.buy_in_chips = ctx.buy_in_chips
   snap.action_timeout_sec = ctx.action_timeout_sec
   snap.action_timeout_mode = ctx.action_timeout_mode
+  snap.ready = ready_status_snapshot(ctx)
   local hh = ctx.hand
   if
     ctx.action_timeout_sec
@@ -900,6 +1028,8 @@ local function run_http()
           seated = ctx.tbl:occupied_count(),
           hand_status = ctx.hand.status,
           buy_in_chips = ctx.buy_in_chips,
+          wait_for_ready = ctx.wait_for_ready == true,
+          first_hand_started = ctx.first_hand_started == true,
         }
       end
     end
@@ -987,6 +1117,93 @@ local function run_http()
     return { __defer_join = true, ctx = c, json = j }
   end)
 
+  --- Signal that a seated player is ready/start-confirmed for the first hand
+  --- of the current table cohort. Body: `{ player_id, ready? }`. `ready`
+  --- defaults to true; pass `false` to withdraw.
+  --- Requires `X-Player-Token` matching `player_id` (same auth model as
+  --- `POST /actions`). Once a cohort's first hand has been dealt this endpoint
+  --- is still accepted but has no effect until the table becomes empty again.
+  local function handle_ready_signal(req, params, s)
+    local c = resolve_table(params, s)
+    if not c then return not_found_table end
+    if type(req.json) ~= "table" then
+      return {
+        "400 Bad Request",
+        api.error_body(
+          "bad_request",
+          "JSON body required with player_id (and optional boolean ready, default true)."
+        ),
+      }
+    end
+    local j = req.json
+    local player_id = j.player_id
+    if not player_id or tostring(player_id) == "" then
+      return {
+        "400 Bad Request",
+        api.error_body("invalid_player", "player_id is required and non-empty."),
+      }
+    end
+    player_id = tostring(player_id)
+
+    local seat = c.tbl:seat_for_player(player_id)
+    if not seat then
+      return {
+        "404 Not Found",
+        api.error_body("not_seated", "Player is not seated at this table."),
+      }
+    end
+
+    local auth_pid = resolve_auth_player(req, c)
+    if not auth_pid then
+      return {
+        "401 Unauthorized",
+        api.error_body(
+          "token_required",
+          "X-Player-Token header required (returned by POST /v1/tables/{id}/join)."
+        ),
+      }
+    end
+    if auth_pid ~= player_id then
+      return {
+        "403 Forbidden",
+        api.error_body(
+          "token_invalid",
+          "X-Player-Token does not match the player_id in the request body."
+        ),
+      }
+    end
+
+    --- Optional, defaults to true. Accepts bool or the strings
+    --- "true"/"false"/"1"/"0" for lenient clients.
+    local ready_flag = j.ready
+    if ready_flag == nil then
+      ready_flag = true
+    elseif type(ready_flag) == "string" then
+      local lv = string.lower(ready_flag)
+      ready_flag = (lv == "true" or lv == "1" or lv == "yes")
+    else
+      ready_flag = ready_flag == true
+    end
+
+    c.ready_players = c.ready_players or {}
+    if ready_flag then
+      c.ready_players[player_id] = true
+    else
+      c.ready_players[player_id] = nil
+    end
+
+    return {
+      ok = true,
+      player_id = player_id,
+      ready = ready_flag,
+      ready_status = ready_status_snapshot(c),
+      table = filter_snapshot_for_player(table_snapshot(c), player_id, c.tbl),
+    }
+  end
+
+  srv:route("POST", "/v1/tables/:id/ready", handle_ready_signal)
+  srv:route("POST", "/v1/tables/:id/start", handle_ready_signal)
+
   srv:route("POST", "/v1/tables/:id/leave", function(req, params, s)
     local c = resolve_table(params, s)
     if not c then return not_found_table end
@@ -1021,6 +1238,7 @@ local function run_http()
     c.tbl:leave_seat(seat)
     clear_player_action_state(c, player_id)
     remove_player_token(c, player_id)
+    rearm_start_gate_if_empty(c)
     return {
       ok = true,
       table = filter_snapshot_for_player(table_snapshot(c), nil, c.tbl),
@@ -1449,6 +1667,8 @@ local function run_http()
         action_timeout_sec = ctx.action_timeout_sec,
         action_timeout_mode = ctx.action_timeout_mode,
         hidden = ctx.hidden == true,
+        wait_for_ready = ctx.wait_for_ready == true,
+        first_hand_started = ctx.first_hand_started == true,
       }
     end
     return { ok = true, tables = list }
@@ -1508,6 +1728,7 @@ local function run_http()
       action_timeout_sec = ats,
       action_timeout_mode = atm,
       hidden = hidden,
+      wait_for_ready = j.wait_for_ready == true,
     })
 
     io.stderr:write(
@@ -1584,6 +1805,9 @@ local function run_http()
       buy_in_chips = c.buy_in_chips,
       action_timeout_sec = c.action_timeout_sec,
       action_timeout_mode = c.action_timeout_mode,
+      wait_for_ready = c.wait_for_ready == true,
+      first_hand_started = c.first_hand_started == true,
+      ready_status = ready_status_snapshot(c),
     }
   end)
 
@@ -1638,6 +1862,7 @@ local function run_http()
     end
     c.tbl:leave_seat(seat)
     clear_player_action_state(c, player_id)
+    rearm_start_gate_if_empty(c)
 
     if c.running_bots[player_id] then
       kill_bot(c.running_bots[player_id].pid)
@@ -1661,6 +1886,11 @@ local function run_http()
     c.action_queue = {}
     c.action_queue_drops = {}
     c.last_action_results = {}
+    --- Re-arm the "wait for ready" gate so a reset table (configured with
+    --- wait_for_ready) pauses again until everyone reconfirms.
+    c.first_hand_started = false
+    c.ready_players = {}
+    c._prev_hand_status = nil
 
     local default_chips = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     for i = 1, c.tbl.max_seats do
@@ -1722,11 +1952,18 @@ local function run_http()
         c.action_timeout_mode = atm
       end
     end
+    if j.wait_for_ready ~= nil then
+      --- Toggling this flag only affects the *next* first hand — if a hand
+      --- has already been dealt, `first_hand_started` remains true and the
+      --- gate stays lifted until a reset re-arms it.
+      c.wait_for_ready = j.wait_for_ready == true
+    end
 
     io.stderr:write("[admin] Settings updated: SB=" .. c.hand.sb_amount .. " BB=" .. c.hand.bb_amount
       .. " zero_chips=" .. c.zero_chips .. " rebuy=" .. tostring(c.rebuy_amount)
       .. " buy_in=" .. tostring(c.buy_in_chips)
       .. " action_timeout=" .. tostring(c.action_timeout_sec) .. "s " .. tostring(c.action_timeout_mode)
+      .. " wait_for_ready=" .. tostring(c.wait_for_ready)
       .. "\n")
     return {
       ok = true,
@@ -1737,6 +1974,8 @@ local function run_http()
       buy_in_chips = c.buy_in_chips,
       action_timeout_sec = c.action_timeout_sec,
       action_timeout_mode = c.action_timeout_mode,
+      wait_for_ready = c.wait_for_ready,
+      first_hand_started = c.first_hand_started == true,
     }
   end)
 

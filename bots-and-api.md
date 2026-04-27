@@ -30,6 +30,8 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 | `GET` | `/v1/tables/:id/my-turn` | Whether it is **your** turn: requires `X-Player-Token`; response `{ "ok": true, "player_id": "...", "is_my_turn": true|false }` |
 | `POST` | `/v1/tables/:id/join` | Take a seat; response includes `token` and `table` |
 | `POST` | `/v1/tables/:id/leave` | Leave (`player_id` in JSON) |
+| `POST` | `/v1/tables/:id/ready` | Signal readiness for the current empty-table cohort's first hand on a `wait_for_ready` table. Body: `{ player_id, ready? }` (`ready` defaults to true). **Requires** `X-Player-Token`. |
+| `POST` | `/v1/tables/:id/start` | Alias for `/ready` for bots that model readiness as a start request. |
 | `POST` | `/v1/tables/:id/actions` | Submit an action (`player_id`, `action`, optional `amount`, optional `queue`, optional `client_action_id`, optional `expected_action_seq`). **Requires** `X-Player-Token` for any seated player. |
 
 **Actions:** `fold`, `check`, `call`, `raise`, `bet`, `all_in`. For `raise` / `bet`, **`amount`** is your **total contribution this street** (not just the increment).
@@ -42,6 +44,52 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 **Related snapshot field:** `table.action_queue_drops[player_id]` surfaces any queued intent the server discarded at fire time (e.g. the betting round advanced before it fired → `reason: "stale_street"`, or the action became illegal → `reason` equals a game-engine code like `min_raise`). A drop entry for you is cleared by your next successful action submission.
 
 **Mid-hand join:** You can now `POST /join` while a hand is active. You take the seat immediately and are dealt in at the **next** `start_hand`. While the in-progress hand continues, any `/actions` you submit are queued for the next deal (effectively `while_idle = true`); `queue: false` returns `wrong_turn` until you are in an actual hand.
+
+---
+
+## Ready gate for tournament-style tables (`wait_for_ready`)
+
+Tables can be created with the option **`wait_for_ready: true`** (admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server **will not deal the first hand after a table has been empty** until every seated player has explicitly signalled readiness with:
+
+```http
+POST /v1/tables/:id/ready
+Content-Type: application/json
+X-Player-Token: <token from /join>
+
+{ "player_id": "MyBot", "ready": true }
+```
+
+`POST /v1/tables/:id/start` is an alias with the same body and response.
+
+`ready` is optional and defaults to `true`; pass `false` to withdraw a signal (e.g. if your bot crashes during warm-up). Only the token holder for `player_id` may toggle that player's flag.
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "player_id": "MyBot",
+  "ready": true,
+  "ready_status": {
+    "wait_for_ready": true,
+    "first_hand_started": false,
+    "ready_players": ["MyBot"],
+    "waiting_players": ["OtherBot"],
+    "all_ready": false
+  },
+  "table": { ... }
+}
+```
+
+**Behaviour summary**
+
+- The cohort's first hand does **not** start until `ready_players` covers every currently-seated player **and** at least two players are seated. Actions submitted before then are auto-queued and fire on the deal; sending `"queue": false` returns **`not_ready`** (HTTP 409).
+- Once that first hand is dealt, every subsequent hand proceeds automatically for as long as the table never becomes empty.
+- When the table reaches **zero seated players**, the gate re-arms. The next set of players must send `/ready` or `/start` again before their first hand.
+- A player who `leave`s (or is kicked) is removed from `ready_players`; if that leave makes the table empty, all ready flags and queued actions are cleared for the next cohort.
+- **Admin `POST /admin/api/tables/:id/reset`** also re-arms the gate — all ready flags are cleared and a fresh round of ready signals is required.
+
+The flag is surfaced on every snapshot as `table.ready` and on `GET /v1/tables` as `wait_for_ready` / `first_hand_started`, so clients can poll to see who is still holding things up.
 
 ---
 
