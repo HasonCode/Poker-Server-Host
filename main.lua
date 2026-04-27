@@ -53,7 +53,7 @@ local function action_http_error(err, extra)
     min_raise = { "400 Bad Request", "min_raise", "Raise does not meet the minimum raise size." },
     cannot_raise_self = { "400 Bad Request", "cannot_raise_self", "You cannot raise again until another player has raised." },
     stale_action = { "409 Conflict", "stale_action", "expected_action_seq does not match current hand.action_seq; refresh state and resubmit." },
-    not_ready = { "409 Conflict", "not_ready", "This table is waiting for every seated player to POST /v1/tables/{id}/ready before dealing the first hand." },
+    not_ready = { "409 Conflict", "not_ready", "This table is waiting for every seated player to POST /v1/tables/{id}/start before dealing the first hand." },
     token_required = { "401 Unauthorized", "token_required", "X-Player-Token header required for this action (returned by POST /v1/tables/{id}/join)." },
     token_invalid = { "403 Forbidden", "token_invalid", "X-Player-Token does not match this player_id at this table." },
   }
@@ -119,6 +119,7 @@ local function create_table_context(id, max_seats, opts)
     --- Replaying a request with the same id returns the cached response
     --- instead of re-applying. Bounded to one entry per player.
     last_action_results = {},
+    pending_join_count = 0,
     _prev_hand_status = nil,
     _act_turn_key = nil,
     _act_deadline = nil,
@@ -207,6 +208,9 @@ local function ready_gate_blocks_start(ctx)
   if not tbl then
     return false
   end
+  if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
+    return true
+  end
   local seated_total = 0
   for i = 1, tbl.max_seats do
     local s = tbl:get_seat(i)
@@ -247,7 +251,9 @@ local function ready_status_snapshot(ctx)
   end
   return {
     wait_for_ready = ctx.wait_for_ready == true,
+    require_start_flags = ctx.wait_for_ready == true,
     first_hand_started = ctx.first_hand_started == true,
+    pending_join_count = ctx.pending_join_count or 0,
     ready_players = ready_list,
     waiting_players = waiting_list,
     all_ready = ctx.wait_for_ready == true
@@ -785,11 +791,28 @@ local function run_http()
     }
   end
 
+  local function count_pending_joins_for_table(s, c)
+    local n = 0
+    for _, pj in ipairs((s and s.pending_joins) or {}) do
+      if pj.ctx == c then
+        n = n + 1
+      end
+    end
+    return n
+  end
+
+  local function has_prior_pending_join_for_table(s, c)
+    return count_pending_joins_for_table(s, c) > 0
+  end
+
   --- @return "ok", body_tbl | "defer" | "error", err_pack
-  local function try_join_seat(c, j)
+  local function try_join_seat(c, j, from_pending)
     local player_id = tostring(j.player_id)
     if c.tbl:seat_for_player(player_id) then
       return "error", join_http_error("already_seated")
+    end
+    if not from_pending and has_prior_pending_join_for_table(state, c) then
+      return "defer"
     end
     local seat_raw = j.seat
     local seat
@@ -868,7 +891,7 @@ local function run_http()
       return true
     end
 
-    local kind, payload = try_join_seat(c, j)
+    local kind, payload = try_join_seat(c, j, true)
     if kind == "defer" then
       return false
     end
@@ -907,15 +930,28 @@ local function run_http()
   local function process_pending_joins(srv)
     local s = srv.get_context()
     for _, ctx in pairs(s.tables) do
+      ctx.pending_join_count = count_pending_joins_for_table(s, ctx)
+    end
+    for _, ctx in pairs(s.tables) do
       table_snapshot(ctx)
     end
     local i = 1
+    local blocked_tables = {}
     while i <= #s.pending_joins do
-      if process_pending_join_entry(s.pending_joins[i]) then
+      local pj = s.pending_joins[i]
+      if pj and blocked_tables[pj.ctx] then
+        i = i + 1
+      elseif process_pending_join_entry(pj) then
         table.remove(s.pending_joins, i)
       else
+        if pj and pj.ctx then
+          blocked_tables[pj.ctx] = true
+        end
         i = i + 1
       end
+    end
+    for _, ctx in pairs(s.tables) do
+      ctx.pending_join_count = count_pending_joins_for_table(s, ctx)
     end
   end
 
@@ -1029,7 +1065,9 @@ local function run_http()
           hand_status = ctx.hand.status,
           buy_in_chips = ctx.buy_in_chips,
           wait_for_ready = ctx.wait_for_ready == true,
+          require_start_flags = ctx.wait_for_ready == true,
           first_hand_started = ctx.first_hand_started == true,
+          pending_join_count = ctx.pending_join_count or 0,
         }
       end
     end
@@ -1203,6 +1241,7 @@ local function run_http()
 
   srv:route("POST", "/v1/tables/:id/ready", handle_ready_signal)
   srv:route("POST", "/v1/tables/:id/start", handle_ready_signal)
+  srv:route("POST", "/v1/tables/:id/start-flag", handle_ready_signal)
 
   srv:route("POST", "/v1/tables/:id/leave", function(req, params, s)
     local c = resolve_table(params, s)
@@ -1668,7 +1707,9 @@ local function run_http()
         action_timeout_mode = ctx.action_timeout_mode,
         hidden = ctx.hidden == true,
         wait_for_ready = ctx.wait_for_ready == true,
+        require_start_flags = ctx.wait_for_ready == true,
         first_hand_started = ctx.first_hand_started == true,
+        pending_join_count = ctx.pending_join_count or 0,
       }
     end
     return { ok = true, tables = list }
@@ -1718,6 +1759,10 @@ local function run_http()
       atm = "eject"
     end
 
+    local require_start_flags = j.require_start_flags == true
+      or j.wait_for_ready == true
+      or j.wait_for_start_flags == true
+
     s.tables[tid] = create_table_context(tid, max_seats, {
       with_ais = with_ais,
       sb_amount = math.max(1, math.floor(sb)),
@@ -1728,7 +1773,7 @@ local function run_http()
       action_timeout_sec = ats,
       action_timeout_mode = atm,
       hidden = hidden,
-      wait_for_ready = j.wait_for_ready == true,
+      wait_for_ready = require_start_flags,
     })
 
     io.stderr:write(
@@ -1739,7 +1784,7 @@ local function run_http()
         .. (hidden and ", hidden" or "")
         .. ")\n"
     )
-    return { ok = true, table_id = tid }
+    return { ok = true, table_id = tid, require_start_flags = require_start_flags, wait_for_ready = require_start_flags }
   end)
 
   srv:route("POST", "/admin/api/tables/:id/delete", function(req, params, s)
@@ -1806,7 +1851,9 @@ local function run_http()
       action_timeout_sec = c.action_timeout_sec,
       action_timeout_mode = c.action_timeout_mode,
       wait_for_ready = c.wait_for_ready == true,
+      require_start_flags = c.wait_for_ready == true,
       first_hand_started = c.first_hand_started == true,
+      pending_join_count = c.pending_join_count or 0,
       ready_status = ready_status_snapshot(c),
     }
   end)
@@ -1952,11 +1999,18 @@ local function run_http()
         c.action_timeout_mode = atm
       end
     end
-    if j.wait_for_ready ~= nil then
-      --- Toggling this flag only affects the *next* first hand — if a hand
-      --- has already been dealt, `first_hand_started` remains true and the
-      --- gate stays lifted until a reset re-arms it.
-      c.wait_for_ready = j.wait_for_ready == true
+    local start_flag_setting = j.require_start_flags
+    if start_flag_setting == nil then
+      start_flag_setting = j.wait_for_start_flags
+    end
+    if start_flag_setting == nil then
+      start_flag_setting = j.wait_for_ready
+    end
+    if start_flag_setting ~= nil then
+      --- Toggling this flag only affects the current cohort if its first hand
+      --- has not started yet; otherwise it applies after reset or after the
+      --- table becomes empty and the next cohort begins.
+      c.wait_for_ready = start_flag_setting == true
     end
 
     io.stderr:write("[admin] Settings updated: SB=" .. c.hand.sb_amount .. " BB=" .. c.hand.bb_amount
@@ -1975,7 +2029,9 @@ local function run_http()
       action_timeout_sec = c.action_timeout_sec,
       action_timeout_mode = c.action_timeout_mode,
       wait_for_ready = c.wait_for_ready,
+      require_start_flags = c.wait_for_ready == true,
       first_hand_started = c.first_hand_started == true,
+      pending_join_count = c.pending_join_count or 0,
     }
   end)
 

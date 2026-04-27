@@ -202,9 +202,9 @@ Stand up from a table. If a hand is active, the player is auto-folded first.
 
 ### `POST /v1/tables/:id/ready`
 
-Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with `wait_for_ready: true`. A cohort begins when players sit at a table that was previously empty. That first hand does not deal until every seated player has signalled readiness (and ≥ 2 players are seated). All subsequent hands deal automatically until the table becomes empty again. On tables without `wait_for_ready`, play auto-starts when two players are seated; this call is still accepted for consistency but does not affect dealing.
+Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with `require_start_flags: true` (alias: `wait_for_ready: true`). A cohort begins when players sit at a table that was previously empty. That first hand does not deal until every seated player has signalled readiness (and ≥ 2 players are seated). All subsequent hands deal automatically until the table becomes empty again. On tables without this option, play auto-starts when two players are seated; this call is still accepted for consistency but does not affect dealing.
 
-`POST /v1/tables/:id/start` is an alias with the same request body and response.
+`POST /v1/tables/:id/start` and `POST /v1/tables/:id/start-flag` are aliases with the same request body and response.
 
 | Python client | `c.set_ready("tournament", player_id="Alice")` or `c.start_table("tournament", player_id="Alice")`; pass `ready=False` to withdraw |
 |---|---|
@@ -236,6 +236,8 @@ Signal that a seated player is ready for the **first hand of the current table c
 ```
 
 Also available on every table snapshot as `table.ready`, so bots can poll `GET .../state` to watch progress without hammering this endpoint.
+
+Join requests before the cohort's first hand starts are batched in FIFO order for that table. If any joins are deferred, newer joins do not bypass older queued joins.
 
 Common errors: `not_seated` (404), `token_required` (401), `token_invalid` (403), `invalid_player` (400).
 

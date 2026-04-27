@@ -250,6 +250,27 @@ function M:match_handler(method, path)
       return h, { table_id = id }
     end
   end
+  id = path:match("^/v1/tables/([^/]+)/ready$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/ready"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
+  id = path:match("^/v1/tables/([^/]+)/start$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/start"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
+  id = path:match("^/v1/tables/([^/]+)/start%-flag$")
+  if id and method == "POST" then
+    local h = self.routes["POST /v1/tables/:id/start-flag"]
+    if h then
+      return h, { table_id = id }
+    end
+  end
   id = path:match("^/v1/tables/([^/]+)/actions$")
   if id and method == "POST" then
     local h = self.routes["POST /v1/tables/:id/actions"]
@@ -407,6 +428,9 @@ function M:serve_one()
         ctx = res_or_err.ctx,
         json = res_or_err.json,
       }
+      if res_or_err.ctx then
+        res_or_err.ctx.pending_join_count = (res_or_err.ctx.pending_join_count or 0) + 1
+      end
       return true
     elseif type(res_or_err) == "table" and res_or_err.__raw then
       send_custom(client, res_or_err.status or "200 OK", res_or_err.headers or {}, res_or_err.body or "")

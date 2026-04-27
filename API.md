@@ -40,8 +40,9 @@ Non-success responses use a JSON object of the form:
 | GET | `/health` | Liveness / service metadata |
 | GET | `/v1/tables/{table_id}/state` | Snapshot: seats, stacks, hand |
 | POST | `/v1/tables/{table_id}/join` | Take a seat (see below) |
-| POST | `/v1/tables/{table_id}/ready` | Signal readiness for the first hand of the current table cohort (`wait_for_ready`) |
+| POST | `/v1/tables/{table_id}/ready` | Signal readiness for the first hand of the current table cohort (`require_start_flags` / `wait_for_ready`) |
 | POST | `/v1/tables/{table_id}/start` | Alias for `/ready` for clients that model this as a start request |
+| POST | `/v1/tables/{table_id}/start-flag` | Alias for `/ready` with explicit start-flag naming |
 | POST | `/v1/tables/{table_id}/actions` | Submit an action (see below) |
 
 Unknown paths return **404** with `code: "not_found"`.
@@ -84,9 +85,9 @@ Common errors: **`seat_taken`** (409), **`table_full`** (409), **`invalid_seat`*
 
 ### POST `/v1/tables/{table_id}/ready`
 
-Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with **`wait_for_ready: true`**. A cohort begins when players sit at a table that was previously empty. That first hand does not start until every seated player (minimum 2) has signalled ready; all subsequent hands for that cohort deal automatically. If the table becomes empty again, the gate re-arms for the next cohort. On tables without the option, play auto-starts as soon as two players are seated; this endpoint is still accepted but has no effect on dealing.
+Signal that a seated player is ready for the **first hand of the current table cohort** on a table created with **`require_start_flags: true`** (alias: `wait_for_ready: true`). A cohort begins when players sit at a table that was previously empty. That first hand does not start until every seated player (minimum 2) has signalled ready; all subsequent hands for that cohort deal automatically. If the table becomes empty again, the gate re-arms for the next cohort. On tables without the option, play auto-starts as soon as two players are seated; this endpoint is still accepted but has no effect on dealing.
 
-`POST /v1/tables/{table_id}/start` is an alias for this endpoint.
+`POST /v1/tables/{table_id}/start` and `POST /v1/tables/{table_id}/start-flag` are aliases for this endpoint.
 
 **Authentication:** `X-Player-Token` header is required and must match `player_id` (same auth model as `POST /actions`).
 
@@ -120,6 +121,7 @@ Body:
 - `ready.ready_players` / `ready.waiting_players` are also surfaced inside every `table` snapshot (`table.ready`) on other endpoints, so bots can poll without spamming the ready endpoint.
 - **`first_hand_started`** flips to `true` as soon as the cohort's first hand is dealt. It resets only when the table becomes completely empty or when `POST /admin/api/tables/{id}/reset` is called.
 - Leaving the table (`POST /leave` / admin kick) removes the player from `ready_players`. A remaining seat that was previously "all ready" will see the gate re-arm until it reconfirms (or another player joins and signals).
+- Join requests are accepted until the first hand starts. Deferred joins are seated FIFO; newer joins do not bypass older queued joins for the same table.
 
 Common errors: **`not_seated`** (404), **`token_required`** (401), **`token_invalid`** (403), **`invalid_player`** (400).
 

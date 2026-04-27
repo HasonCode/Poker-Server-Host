@@ -38,6 +38,7 @@
   const settingsForm = $("#settingsForm");
   const setSB        = $("#setSB");
   const setBB        = $("#setBB");
+  const setRequireStartFlags = $("#setRequireStartFlags");
   const resetBtn     = $("#resetBtn");
   const settingsErr  = $("#settingsErr");
 
@@ -297,10 +298,14 @@
       const hiddenTag = t.hidden
         ? '<span class="pill pill-muted">hidden</span>'
         : "";
+      const startFlagTag = t.require_start_flags
+        ? '<span class="pill pill-muted">start flags</span>'
+        : "";
       div.innerHTML =
         '<span class="table-entry-left">' +
         '<span class="table-entry-id">' + esc(t.table_id) + '</span>' +
         hiddenTag +
+        startFlagTag +
         '</span>' +
         '<span class="sub">' + t.seated + '/' + t.max_seats + ' seats · ' +
         'SB/BB ' + t.sb_amount + '/' + t.bb_amount + ' · buy-in ' + (t.buy_in_chips ?? "—") +
@@ -350,6 +355,9 @@
       }
       if (setActionTimeoutMode) {
         setActionTimeoutMode.value = data.action_timeout_mode || "eject";
+      }
+      if (setRequireStartFlags) {
+        setRequireStartFlags.checked = !!data.require_start_flags;
       }
 
       renderPlayers(data.players || [], data.ai_players || {});
@@ -527,6 +535,7 @@
         sb_amount: parseInt($("#newSB").value, 10) || 2,
         bb_amount: parseInt($("#newBB").value, 10) || 5,
         with_ais: $("#newWithAIs").checked,
+        require_start_flags: $("#newRequireStartFlags").checked,
         hidden: $("#newHidden").checked,
         zero_chips: $("#newZeroChips").value,
         rebuy_amount: parseInt($("#newRebuyAmt").value, 10) || 500,
@@ -615,6 +624,7 @@
           return Number.isFinite(v) ? v : 60;
         })(),
         action_timeout_mode: $("#setActionTimeoutMode").value,
+        require_start_flags: setRequireStartFlags ? setRequireStartFlags.checked : false,
       });
       await loadTables();
     } catch (err) {

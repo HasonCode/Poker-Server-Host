@@ -30,8 +30,9 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 | `GET` | `/v1/tables/:id/my-turn` | Whether it is **your** turn: requires `X-Player-Token`; response `{ "ok": true, "player_id": "...", "is_my_turn": true|false }` |
 | `POST` | `/v1/tables/:id/join` | Take a seat; response includes `token` and `table` |
 | `POST` | `/v1/tables/:id/leave` | Leave (`player_id` in JSON) |
-| `POST` | `/v1/tables/:id/ready` | Signal readiness for the current empty-table cohort's first hand on a `wait_for_ready` table. Body: `{ player_id, ready? }` (`ready` defaults to true). **Requires** `X-Player-Token`. |
+| `POST` | `/v1/tables/:id/ready` | Signal readiness for the current empty-table cohort's first hand on a `require_start_flags` / `wait_for_ready` table. Body: `{ player_id, ready? }` (`ready` defaults to true). **Requires** `X-Player-Token`. |
 | `POST` | `/v1/tables/:id/start` | Alias for `/ready` for bots that model readiness as a start request. |
+| `POST` | `/v1/tables/:id/start-flag` | Alias for `/ready` with explicit start-flag naming. |
 | `POST` | `/v1/tables/:id/actions` | Submit an action (`player_id`, `action`, optional `amount`, optional `queue`, optional `client_action_id`, optional `expected_action_seq`). **Requires** `X-Player-Token` for any seated player. |
 
 **Actions:** `fold`, `check`, `call`, `raise`, `bet`, `all_in`. For `raise` / `bet`, **`amount`** is your **total contribution this street** (not just the increment).
@@ -49,7 +50,7 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 
 ## Ready gate for tournament-style tables (`wait_for_ready`)
 
-Tables can be created with the option **`wait_for_ready: true`** (admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server **will not deal the first hand after a table has been empty** until every seated player has explicitly signalled readiness with:
+Tables can be created with the option **`require_start_flags: true`** (alias: `wait_for_ready: true`; admin API on create, or later via `/admin/api/tables/:id/settings`). When set, the server **will not deal the first hand after a table has been empty** until every seated player has explicitly signalled readiness with:
 
 ```http
 POST /v1/tables/:id/ready
@@ -59,7 +60,7 @@ X-Player-Token: <token from /join>
 { "player_id": "MyBot", "ready": true }
 ```
 
-`POST /v1/tables/:id/start` is an alias with the same body and response.
+`POST /v1/tables/:id/start` and `POST /v1/tables/:id/start-flag` are aliases with the same body and response.
 
 `ready` is optional and defaults to `true`; pass `false` to withdraw a signal (e.g. if your bot crashes during warm-up). Only the token holder for `player_id` may toggle that player's flag.
 
@@ -84,6 +85,7 @@ X-Player-Token: <token from /join>
 **Behaviour summary**
 
 - The cohort's first hand does **not** start until `ready_players` covers every currently-seated player **and** at least two players are seated. Actions submitted before then are auto-queued and fire on the deal; sending `"queue": false` returns **`not_ready`** (HTTP 409).
+- Join requests are accepted until that first hand starts. If joins are deferred, they are seated FIFO for that table; newer joins do not jump ahead of older queued joins.
 - Once that first hand is dealt, every subsequent hand proceeds automatically for as long as the table never becomes empty.
 - When the table reaches **zero seated players**, the gate re-arms. The next set of players must send `/ready` or `/start` again before their first hand.
 - A player who `leave`s (or is kicked) is removed from `ready_players`; if that leave makes the table empty, all ready flags and queued actions are cleared for the next cohort.
