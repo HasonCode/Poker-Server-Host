@@ -55,7 +55,7 @@ Tables can be created with the option **`require_start_flags: true`** (alias: `w
 The lobby is released when **either**:
 
 - every player at the table (lobby + any pre-existing seats; minimum 2) has signalled readiness, **or**
-- `action_timeout_sec` has elapsed since the *first* ready signal arrived **and** at least two players have readied — in which case the lobby is released and any player that never readied is **auto-folded for that one hand**.
+- `action_timeout_sec` has elapsed since the *first* ready signal arrived **and** at least two players have readied — in which case any player who never readied is **fully ejected from the table** (their lobby/seat slot is dropped, their auth token is invalidated, and any running bot is killed) before the surviving cohort is seated.
 
 When the lobby releases, **seats are randomly shuffled across the table**, blinds are posted, and cards are dealt. The optional `seat` field on `POST /join` is ignored while the gate is active — placement is randomized by design.
 

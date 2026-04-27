@@ -57,44 +57,19 @@ local function record_drop(ctx, pid, qent, reason)
   }
 end
 
---- After `start_hand`, fold any seated player who never POSTed /ready on a
---- `wait_for_ready` table (limbo-fold timeout path). No-op when everyone
---- readied. Shared with main.lua when the first hand is started via a
---- player action instead of snapshot auto-run.
-function M.after_start_hand_limbo_autofold(ctx)
-  local tbl = ctx.tbl
-  local hand = ctx.hand
-  if ctx.wait_for_ready ~= true or not ctx.ready_players or hand.status ~= "active" then
-    return
-  end
-  local readied = ctx.ready_players
-  local ai_players = ctx.ai_players or {}
-  local autofold_first_actor = false
-  for _, seat in ipairs(hand.occupied_ring or {}) do
-    local row = tbl:get_seat(seat)
-    --- AI players never POST `/ready` -- they're implicitly ready and must
-    --- not be limbo-folded. Skip them here to mirror tally_ready.
-    if row and not readied[row.player_id] and not ai_players[row.player_id] then
-      hand.folded[seat] = true
-      hand.pending[seat] = nil
-      hand.acted_this_street[seat] = true
-      hand:_log(row.player_id, seat, "fold", nil)
-      if hand.action_to_seat == seat then
-        autofold_first_actor = true
-      end
-      io.stderr:write(
-        "[poker-server] Auto-folding "
-          .. tostring(row.player_id)
-          .. " (seat "
-          .. tostring(seat)
-          .. ") for first hand: not in ready_players (limbo)\n"
-      )
-    end
-  end
-  if autofold_first_actor and hand.action_to_seat then
-    hand:_after_action(tbl, hand.action_to_seat)
-  end
+--- Compatibility shim (no-op). The ready-gate flow used to keep non-ready
+--- players seated and auto-fold them on the first hand; current behaviour
+--- is to fully *eject* them in main.lua's `release_lobby_to_table` before
+--- `start_hand` runs, so by the time we get here no further action is
+--- needed. Kept as a named hook because external entry points (the action
+--- route's idle branch) still call it for symmetry; once we are sure all
+--- callers are updated this can be removed.
+function M.after_start_hand_pre_start_eject(_ctx)
+  return
 end
+
+--- Old name kept for backwards compatibility with any external callers.
+M.after_start_hand_limbo_autofold = M.after_start_hand_pre_start_eject
 
 --- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table, action_queue_drops?: table, wait_for_ready?: boolean, first_hand_started?: boolean, ready_players?: { [string]: boolean }, pending_join_count?: number }
 function M.run_until_human(ctx)
@@ -119,10 +94,10 @@ function M.run_until_human(ctx)
       return
     end
 
-    M.after_start_hand_limbo_autofold(ctx)
+    M.after_start_hand_pre_start_eject(ctx)
 
     ctx.first_hand_started = true
-    --- Clear the limbo-fold timer so a future cohort (after the table empties)
+    --- Clear the start-timeout timer so a future cohort (after the table empties)
     --- starts with a fresh window. rearm_start_gate_if_empty also resets it
     --- but we don't want a stale value sticking around mid-cohort if the
     --- engine paths through alternative reset routes.
