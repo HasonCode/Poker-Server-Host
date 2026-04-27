@@ -723,7 +723,9 @@ local function table_snapshot(ctx)
   ctx._prev_hand_status = h.status
   check_action_timeout(ctx)
   rearm_start_gate_if_empty(ctx)
-  ai.run_until_human(ctx)
+  if not ready_gate_blocks_start(ctx) then
+    ai.run_until_human(ctx)
+  end
   local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue, ctx.action_queue_drops)
   snap.zero_chips = ctx.zero_chips
   snap.rebuy_amount = ctx.rebuy_amount
