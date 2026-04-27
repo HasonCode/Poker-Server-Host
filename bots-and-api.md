@@ -28,6 +28,8 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 | `GET` | `/v1/tables` | List public tables (`table_id`, `seated`, `max_seats`, `rebuy_amount`, …) |
 | `GET` | `/v1/tables/:id/state` | Full table snapshot (hole cards only for the authenticated seat, if token sent) |
 | `GET` | `/v1/tables/:id/my-turn` | Whether it is **your** turn: requires `X-Player-Token`; response `{ "ok": true, "player_id": "...", "is_my_turn": true|false }` |
+| `GET` | `/v1/tables/:id/last-winners` | Most recent hand winner(s) and amount won. Persists across the whole next hand so you can poll mid-game. No auth. |
+| `GET` | `/v1/tables/:id/busts` | Per-player bust counts (times each player hit zero chips and was either ejected or rebought). No auth. |
 | `POST` | `/v1/tables/:id/join` | Take a seat; response includes `token` and `table` |
 | `POST` | `/v1/tables/:id/leave` | Leave (`player_id` in JSON) |
 | `POST` | `/v1/tables/:id/ready` | Signal readiness from the lobby on a `require_start_flags` / `wait_for_ready` table. Required for every joiner before they are seated and dealt in (applies to both the first cohort and any later mid-game joiner). Body: `{ player_id, ready? }` (`ready` defaults to true). **Requires** `X-Player-Token`. |
@@ -110,6 +112,69 @@ X-Player-Token: <token from /join>
 - **Admin `POST /admin/api/tables/:id/settings`** with `require_start_flags: true` migrates any humans currently seated back into the lobby so they have to ready up again before the next deal (AI players keep their seat).
 
 The flag is surfaced on every snapshot as `table.ready` and on `GET /v1/tables` as `wait_for_ready` / `first_hand_started`, so clients can poll to see who is still holding things up. Use `start_timeout_remaining_sec` to render a countdown — once it hits zero any still-un-ready lobby member is **ejected** from the table (they must `POST /join` again to re-enter, which puts them back in the lobby) and the surviving ready cohort is seated. Late joiners do **not** reset the timer; if they want to play in the impending hand they must ready up before the existing window closes.
+
+---
+
+## Last-hand winner and bust counts
+
+Two read-only endpoints expose the most recent hand outcome and per-player bust counts. Both fields are also mirrored at the top level of every `/state` snapshot (under `last_winners`, `last_hand_finished_at`, and `bust_counts`) so polling clients don't strictly need to call them — they exist as convenience endpoints for thin UIs and bots that only need the highlight reel.
+
+### `GET /v1/tables/:id/last-winners`
+
+Returns who won the most recent hand on this table. The data persists across the entire next hand (it's only overwritten when the next hand resolves) so you can poll it during an active hand and still see "the previous winner". Cleared on admin reset and when the table goes fully empty.
+
+```json
+{
+  "ok": true,
+  "table_id": "demo",
+  "hand_status": "active",
+  "street": "flop",
+  "last_winners": [
+    {
+      "seat": 3,
+      "player_id": "Alice",
+      "amount": 42,
+      "hand_name": "Two Pair, Aces and Sevens"
+    }
+  ],
+  "total_awarded": 42,
+  "finished_at": 1743031829,
+  "had_winner": true,
+  "went_to_showdown": true
+}
+```
+
+- `last_winners` is `null` when no hand has resolved for the current cohort yet (e.g. just after admin reset).
+- `had_winner` is a convenience boolean for empty-state rendering.
+- `went_to_showdown` is `false` when the hand ended on a single fold (`hand_name == "fold"`); `true` otherwise.
+- Ties split the pot — `last_winners` will have multiple entries each with a fractional `amount`. `total_awarded` sums them.
+- `finished_at` is a Unix timestamp (seconds, server clock).
+
+### `GET /v1/tables/:id/busts`
+
+Returns per-player bust counts — how many times each player has reached zero chips and been either ejected (`zero_chips=eject`) or rebought (`zero_chips=rebuy`). Useful for leaderboards, "biggest grinder" stats, or just to know who keeps going broke. Cleared on admin reset and when the table goes fully empty.
+
+```json
+{
+  "ok": true,
+  "table_id": "demo",
+  "bust_counts": { "Alice": 1, "Bob": 3 },
+  "busts": [
+    { "player_id": "Bob", "count": 3 },
+    { "player_id": "Alice", "count": 1 }
+  ],
+  "total_busts": 4,
+  "zero_chips": "rebuy",
+  "rebuy_amount": 500
+}
+```
+
+- `bust_counts` is the raw map, keyed by `player_id`.
+- `busts` is a parallel array sorted **descending by `count`** (then ascending by `player_id` for stability) so a leaderboard can render it directly without re-sorting.
+- `total_busts` is the sum across all players.
+- `zero_chips` and `rebuy_amount` are echoed so clients can phrase the count correctly ("3× ejected" vs "3× rebought for 500").
+
+Both fields are also embedded in `GET /v1/tables/:id/state` as top-level `last_winners`, `last_hand_finished_at`, and `bust_counts`, so a UI that already polls `/state` doesn't need a second round-trip.
 
 ---
 

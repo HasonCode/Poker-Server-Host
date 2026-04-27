@@ -30,7 +30,10 @@ end
 
 --- Validate the session cookie on a request.
 --- Returns the session table { email, created_at } or nil.
-function M.validate_session(req, admin_email)
+--- @param admin_allow string|table|nil If a string, session email must match
+--- (case-insensitive). If a table, keys must be lowercased emails allowed
+--- as admins. If nil, any valid session passes (not used by the server).
+function M.validate_session(req, admin_allow)
   local c = req.cookies
   local token = c and (c[SESSION_COOKIE] or c[SESSION_COOKIE:lower()])
   if not token or token == "" then return nil end
@@ -43,8 +46,17 @@ function M.validate_session(req, admin_email)
     return nil
   end
 
-  if admin_email and sess.email ~= admin_email then
-    return nil
+  if admin_allow then
+    local e = (sess.email or ""):lower()
+    if type(admin_allow) == "string" then
+      if e ~= admin_allow:lower() then
+        return nil
+      end
+    elseif type(admin_allow) == "table" then
+      if not admin_allow[e] then
+        return nil
+      end
+    end
   end
 
   return sess

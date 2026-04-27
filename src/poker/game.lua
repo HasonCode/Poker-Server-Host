@@ -504,7 +504,13 @@ function HandState:start_hand(tbl)
   self.seq = 0
   self.status = "active"
   self.street = "preflop"
-  self.last_winners = nil
+  --- NOTE: do NOT wipe `last_winners` here. It refers to the *previous*
+  --- hand's outcome and we want clients (UI, bots) to be able to read
+  --- "who won the last hand" while a new hand is in progress. It will
+  --- be naturally overwritten by the next call to `_award_fold_winner`
+  --- or `_award_showdown` when the new hand resolves. The only paths
+  --- that fully clear it are server-side resets (admin reset, table
+  --- empties via `rearm_start_gate_if_empty`).
 
   self.button_seat = pos.button
   self.sb_seat = pos.sb

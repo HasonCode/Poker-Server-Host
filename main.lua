@@ -755,6 +755,15 @@ local function rearm_start_gate_if_empty(ctx)
   ctx._last_join_at = nil
   ctx._last_start_flag_at = nil
   ctx._first_ready_at = nil
+  --- An empty table starts a brand new game; clear the per-game stats
+  --- so a returning cohort doesn't see stale "last winner" / bust
+  --- counts from the previous game. Bust totals are reset because the
+  --- old players are gone; the new cohort tracks busts from zero.
+  if ctx.hand then
+    ctx.hand.last_winners = nil
+  end
+  ctx.last_hand_finished_at = nil
+  ctx.bust_counts = {}
   return true
 end
 
@@ -1220,6 +1229,11 @@ local function table_snapshot(ctx)
   if ctx._prev_hand_status == "active" and h.status == "idle" then
     ctx.action_queue = {}
     handle_zero_chips(ctx)
+    --- Capture the wall-clock time the hand ended so the public
+    --- "who won last" endpoint can surface it. Bust counts are
+    --- accumulated by `handle_zero_chips` (above) for any seat that
+    --- ended the hand at <= 0 chips.
+    ctx.last_hand_finished_at = os.time()
   end
   if h.status == "active" then
     --- Defensive: any code path that actually dealt a hand clears the
@@ -1252,6 +1266,22 @@ local function table_snapshot(ctx)
   snap.action_timeout_sec = ctx.action_timeout_sec
   snap.action_timeout_mode = ctx.action_timeout_mode
   snap.ready = ready_status_snapshot(ctx)
+  --- Mirror the hand's `last_winners` to a top-level field so clients
+  --- don't need to dig into `hand.last_winners` (which UI code may
+  --- ignore once a new hand is in progress). Stays populated across
+  --- the next hand and is overwritten when that hand finishes.
+  snap.last_winners = ctx.hand and ctx.hand.last_winners or nil
+  snap.last_hand_finished_at = ctx.last_hand_finished_at
+  --- Per-player bust counts (number of times they hit zero chips and
+  --- were either ejected or rebought). Keyed by player_id. Persists
+  --- for the lifetime of the current cohort (cleared when the table
+  --- empties or admin reset). Surfaced for both bots and UIs so they
+  --- can render leaderboard / "last surviving" stats.
+  local busts = {}
+  if ctx.bust_counts then
+    for pid, n in pairs(ctx.bust_counts) do busts[tostring(pid)] = n end
+  end
+  snap.bust_counts = busts
   local hh = ctx.hand
   if
     ctx.action_timeout_sec
@@ -1281,6 +1311,29 @@ local function run_http()
   local socket_ok, socket = pcall(require, "socket")
   local state = create_server_state()
   local root = script_dir()
+
+  --- Google accounts allowed to use `/admin` after OAuth. Merge
+  --- `ADMIN_EMAIL` (single or comma-separated) and `ADMIN_EMAILS`
+  --- (comma-separated list). Keys are lowercased for comparison.
+  local function parse_admin_allowlist()
+    local set = {}
+    local function ingest_csv(s)
+      if not s or type(s) ~= "string" or s == "" then
+        return
+      end
+      for part in string.gmatch(s, "[^,]+") do
+        local em = part:match("^%s*(.-)%s*$")
+        if em and em ~= "" then
+          set[em:lower()] = true
+        end
+      end
+    end
+    ingest_csv(os.getenv("ADMIN_EMAIL") or "")
+    ingest_csv(os.getenv("ADMIN_EMAILS") or "")
+    return set
+  end
+
+  local ADMIN_ALLOW = parse_admin_allowlist()
 
   local function pending_client_closed(client)
     if not socket_ok then
@@ -1573,9 +1626,8 @@ local function run_http()
 
   --- Must be defined before routes that call it. Admin cookie OR POKER_SPECTATE_SECRET (header / query).
   local function spectate_authorized(req)
-    local admin_email = os.getenv("ADMIN_EMAIL") or ""
-    if admin_email ~= "" then
-      local sess = admin_auth.validate_session(req, admin_email)
+    if next(ADMIN_ALLOW) ~= nil then
+      local sess = admin_auth.validate_session(req, ADMIN_ALLOW)
       if sess then
         return true
       end
@@ -1673,6 +1725,83 @@ local function run_http()
     local ats = h.action_to_seat
     local is_my_turn = h.status == "active" and ats ~= nil and ats == seat
     return { ok = true, player_id = auth_pid, is_my_turn = is_my_turn }
+  end)
+
+  --- Most recent hand winner(s) for this table. Returns the per-seat
+  --- award breakdown produced by the engine (`last_winners`) along with
+  --- the wall-clock time the hand finished. Persists across the entire
+  --- next hand so a client polling during an active hand can still see
+  --- who won the previous one. While `last_winners` is null (no hand
+  --- has completed for the current cohort yet) the response still has
+  --- `ok=true`. No auth required -- the same data is in every state
+  --- snapshot.
+  srv:route("GET", "/v1/tables/:id/last-winners", function(req, params, s)
+    local c = resolve_table(params, s)
+    if not c then return not_found_table end
+    --- Drive the snapshot loop so any pending active->idle transition
+    --- captures `last_hand_finished_at` and bust accounting before we
+    --- read it.
+    table_snapshot(c)
+    local lw = c.hand and c.hand.last_winners or nil
+    --- Total awarded across the winner list (useful for clients that
+    --- want to render a one-line summary).
+    local total = 0
+    if type(lw) == "table" then
+      for _, w in ipairs(lw) do total = total + (tonumber(w.amount) or 0) end
+    end
+    return {
+      ok = true,
+      table_id = c.tbl.id,
+      hand_status = c.hand and c.hand.status or "idle",
+      street = c.hand and c.hand.street or nil,
+      last_winners = lw,
+      total_awarded = total,
+      finished_at = c.last_hand_finished_at,
+      --- Convenience flags so simple consumers don't have to inspect
+      --- the array shape themselves.
+      had_winner = lw ~= nil and #lw > 0,
+      went_to_showdown = lw ~= nil and #lw > 0
+        and tostring(lw[1].hand_name or "") ~= "fold",
+    }
+  end)
+
+  --- Per-player bust counts (number of times each player has reached
+  --- zero chips and was either ejected or rebought). Keyed by
+  --- player_id. Includes a parallel sorted-by-count list so clients
+  --- can render leaderboards without re-sorting client-side. Persists
+  --- for the lifetime of the current cohort (cleared on admin reset
+  --- or when the table goes fully empty). No auth required.
+  srv:route("GET", "/v1/tables/:id/busts", function(req, params, s)
+    local c = resolve_table(params, s)
+    if not c then return not_found_table end
+    --- Drive the snapshot loop to settle any in-flight bust accounting.
+    table_snapshot(c)
+    local map = {}
+    local list = {}
+    local total = 0
+    if c.bust_counts then
+      for pid, n in pairs(c.bust_counts) do
+        if n and n > 0 then
+          map[tostring(pid)] = n
+          list[#list + 1] = { player_id = tostring(pid), count = n }
+          total = total + n
+        end
+      end
+    end
+    --- Sort descending by count, then by player_id for stability.
+    table.sort(list, function(a, b)
+      if a.count ~= b.count then return a.count > b.count end
+      return a.player_id < b.player_id
+    end)
+    return {
+      ok = true,
+      table_id = c.tbl.id,
+      bust_counts = map,
+      busts = list,
+      total_busts = total,
+      zero_chips = c.zero_chips,
+      rebuy_amount = c.rebuy_amount,
+    }
   end)
 
   srv:route("POST", "/v1/tables/:id/join", function(req, params, s)
@@ -2098,18 +2227,20 @@ local function run_http()
 
   local GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID") or ""
   local GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET") or ""
-  local ADMIN_EMAIL          = os.getenv("ADMIN_EMAIL") or ""
   local admin_port           = tonumber(os.getenv("POKER_PORT") or "8080") or 8080
   local ADMIN_REDIRECT_URI   = os.getenv("ADMIN_REDIRECT_URI")
     or ("http://localhost:" .. admin_port .. "/admin/oauth/callback")
   local ADMIN_COOKIE_SECURE  = (ADMIN_REDIRECT_URI:sub(1, 8) == "https://")
 
   local function require_admin(req)
-    if ADMIN_EMAIL == "" then
+    if next(ADMIN_ALLOW) == nil then
       return nil, { "503 Service Unavailable",
-        api.error_body("not_configured", "Admin auth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and ADMIN_EMAIL.") }
+        api.error_body(
+          "not_configured",
+          "Admin auth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and ADMIN_EMAIL or ADMIN_EMAILS."
+        ) }
     end
-    local sess = admin_auth.validate_session(req, ADMIN_EMAIL)
+    local sess = admin_auth.validate_session(req, ADMIN_ALLOW)
     if not sess then
       return nil, { "401 Unauthorized", api.error_body("unauthorized", "Admin login required.") }
     end
@@ -2165,13 +2296,13 @@ local function run_http()
       }
     end
 
-    if result.email ~= ADMIN_EMAIL then
-      io.stderr:write("[admin] Access denied for: " .. result.email .. "\n")
+    if not ADMIN_ALLOW[(result.email or ""):lower()] then
+      io.stderr:write("[admin] Access denied for: " .. tostring(result.email) .. "\n")
       return {
         __raw = true,
         status = "403 Forbidden",
         headers = { ["Content-Type"] = "text/plain" },
-        body = "Access denied. This account (" .. result.email .. ") is not authorized.",
+        body = "Access denied. This account (" .. tostring(result.email) .. ") is not authorized.",
       }
     end
 
@@ -2536,6 +2667,12 @@ local function run_http()
     c._last_join_at = nil
     c._last_start_flag_at = nil
     c._first_ready_at = nil
+    --- Wipe per-game stats so the post-reset cohort starts clean: no
+    --- stale "last winner" pointing at chips that were just refunded,
+    --- and no bust counter inherited from the previous game.
+    c.hand.last_winners = nil
+    c.last_hand_finished_at = nil
+    c.bust_counts = {}
 
     local default_chips = math.max(1, math.floor(tonumber(c.buy_in_chips) or 500))
     for i = 1, c.tbl.max_seats do
@@ -2736,8 +2873,19 @@ local function run_http()
     return { ok = true, player_id = player_id, stopped = true }
   end)
 
-  if ADMIN_EMAIL ~= "" then
-    io.stderr:write(string.format("  Admin: http://127.0.0.1:%s/admin (email: %s)\n", tostring(admin_port), ADMIN_EMAIL))
+  if next(ADMIN_ALLOW) ~= nil then
+    local list = {}
+    for e, _ in pairs(ADMIN_ALLOW) do
+      list[#list + 1] = e
+    end
+    table.sort(list)
+    io.stderr:write(
+      string.format(
+        "  Admin: http://127.0.0.1:%s/admin (allowed: %s)\n",
+        tostring(admin_port),
+        table.concat(list, ", ")
+      )
+    )
     io.stderr:write(string.format("  OAuth redirect: %s\n", ADMIN_REDIRECT_URI))
   end
 
