@@ -359,6 +359,15 @@
       if (setRequireStartFlags) {
         setRequireStartFlags.checked = !!data.require_start_flags;
       }
+      const setMinPlayersToStart = $("#setMinPlayersToStart");
+      if (setMinPlayersToStart) {
+        setMinPlayersToStart.value = data.min_players_to_start != null ? data.min_players_to_start : 2;
+        setMinPlayersToStart.max = data.max_seats || 10;
+      }
+      const setStartGraceSec = $("#setStartGraceSec");
+      if (setStartGraceSec) {
+        setStartGraceSec.value = data.start_grace_sec != null ? data.start_grace_sec : 8;
+      }
 
       renderPlayers(data.players || [], data.ai_players || {});
       renderBots(data.running_bots || []);
@@ -613,7 +622,9 @@
     if (!selectedTable) return;
     settingsErr.textContent = "";
     try {
-      await apiFetch("POST", "/admin/api/tables/" + encodeURIComponent(selectedTable) + "/settings", {
+      const minPlayersEl = $("#setMinPlayersToStart");
+      const startGraceEl = $("#setStartGraceSec");
+      const payload = {
         sb_amount: parseInt(setSB.value, 10),
         bb_amount: parseInt(setBB.value, 10),
         zero_chips: $("#setZeroChips").value,
@@ -625,7 +636,16 @@
         })(),
         action_timeout_mode: $("#setActionTimeoutMode").value,
         require_start_flags: setRequireStartFlags ? setRequireStartFlags.checked : false,
-      });
+      };
+      if (minPlayersEl) {
+        const v = parseInt(minPlayersEl.value, 10);
+        if (Number.isFinite(v)) payload.min_players_to_start = v;
+      }
+      if (startGraceEl) {
+        const v = parseInt(startGraceEl.value, 10);
+        if (Number.isFinite(v)) payload.start_grace_sec = v;
+      }
+      await apiFetch("POST", "/admin/api/tables/" + encodeURIComponent(selectedTable) + "/settings", payload);
       await loadTables();
     } catch (err) {
       settingsErr.textContent = err.message;

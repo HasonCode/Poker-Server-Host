@@ -111,6 +111,23 @@ local function create_table_context(id, max_seats, opts)
   if start_grace_sec < 0 then
     start_grace_sec = 0
   end
+  --- Minimum participants required before the lobby can release (for
+  --- `wait_for_ready` tables only). Defaults to 2 -- the engine's
+  --- absolute minimum -- but operators expecting an N-handed game can
+  --- bump this so the gate refuses to fire until the full cohort is
+  --- present and ready. Capped to `max_seats` so a misconfigured table
+  --- doesn't deadlock forever.
+  local min_players_to_start = opts.min_players_to_start
+  if min_players_to_start == nil then
+    min_players_to_start = tonumber(os.getenv("POKER_MIN_PLAYERS_TO_START")) or 2
+  end
+  min_players_to_start = math.floor(tonumber(min_players_to_start) or 2)
+  if min_players_to_start < 2 then
+    min_players_to_start = 2
+  end
+  if min_players_to_start > (max_seats or 10) then
+    min_players_to_start = max_seats or 10
+  end
   if opts.with_ais then
     for i = 1, math.min(6, max_seats or 10) do
       local pid = "ai_" .. i
@@ -137,6 +154,9 @@ local function create_table_context(id, max_seats, opts)
     last_action_results = {},
     pending_join_count = 0,
     start_grace_sec = start_grace_sec,
+    --- Minimum participants (seated + ready lobby) required before the
+    --- ready gate will release. See `ready_gate_blocks_start` for use.
+    min_players_to_start = min_players_to_start,
     _last_join_at = nil,
     _last_start_flag_at = nil,
     --- Wall-clock time (os.clock seconds) when the first /ready signal of the
@@ -600,15 +620,24 @@ local function ready_gate_blocks_start(ctx)
   --- plus the lobby members who readied (un-ready ones get ejected).
   local total_after_release = seated_count + ready_lobby
 
+  --- Hard minimum cohort size before any release. Defaults to 2 (the
+  --- engine floor) but tables expecting an N-handed lineup can bump
+  --- this so a fast-readying duo doesn't snap the gate shut on slower
+  --- joiners. Capped to max_seats by `create_table_context` so this
+  --- can't deadlock by misconfiguration.
+  local min_required = tonumber(ctx.min_players_to_start) or 2
+  if min_required < 2 then min_required = 2 end
+
   if unready_lobby > 0 then
     --- Lobby has at least one player who hasn't readied. Block by
-    --- default; the only escape is the start-timeout. Note that we
-    --- count *seated_count + ready_lobby* (i.e. the post-release total)
-    --- toward the "≥ 2 ready" requirement so an established 4-handed
-    --- table doesn't deadlock just because a 5th joiner is mid-handshake.
+    --- default; the only escape is the start-timeout. We count
+    --- *seated_count + ready_lobby* (i.e. the post-release total)
+    --- toward the "≥ min_required ready" check so an established
+    --- 4-handed table doesn't deadlock just because a 5th joiner is
+    --- mid-handshake.
     if ctx._first_ready_at then
       local timeout = tonumber(ctx.action_timeout_sec) or 0
-      if timeout > 0 and total_after_release >= 2 then
+      if timeout > 0 and total_after_release >= min_required then
         local elapsed = os.clock() - ctx._first_ready_at
         if elapsed >= timeout then
           --- Even on timeout, respect any in-flight joins/grace so we
@@ -625,10 +654,13 @@ local function ready_gate_blocks_start(ctx)
     return true
   end
 
-  --- All lobby members are ready (or the lobby is empty).
-  if total_after_release < 2 then
-    --- Not enough participants to deal yet. Block until at least two
-    --- ready/seated players are present.
+  --- All lobby members are ready (or the lobby is empty). Hold the gate
+  --- until we have at least `min_required` participants -- this is the
+  --- knob that lets operators say "this game has 4 players, don't deal
+  --- until all 4 are present". Bumping it past 2 effectively waits for
+  --- the rest of the cohort to join + ready instead of starting hand 1
+  --- with whoever was first.
+  if total_after_release < min_required then
     return true
   end
 
@@ -704,20 +736,23 @@ local function ready_status_snapshot(ctx)
     in_lobby_phase = lobby_active(ctx) == true and #lobby > 0,
     pending_join_count = ctx.pending_join_count or 0,
     start_grace_sec = ctx.start_grace_sec or 0,
+    --- Minimum participants required before the gate releases. Surfaced
+    --- so UIs can render "waiting for N players" copy.
+    min_players_to_start = ctx.min_players_to_start or 2,
     ready_players = ready_list,
     waiting_players = waiting_list,
     --- Players who are not yet at a seat. UIs render this as a separate
     --- "waiting room" panel distinct from the felt.
     lobby_players = lobby,
     --- True when every player (seated + lobby) is ready and the table
-    --- has at least two participants. Pending joins and grace still
-    --- apply -- the gate may still be blocking briefly even when this
-    --- is true.
+    --- has at least `min_players_to_start` participants. Pending joins
+    --- and grace still apply -- the gate may still be blocking briefly
+    --- even when this is true.
     all_ready = ctx.wait_for_ready == true
       and (not pending_block)
       and (not grace_block)
       and (#waiting_list == 0)
-      and (#seated >= 2),
+      and (#seated >= (ctx.min_players_to_start or 2)),
     --- Start-timeout fields. start_timeout_sec is the maximum window
     --- (= action_timeout_sec) and start_timeout_remaining_sec ticks
     --- down once the first /ready of the current lobby cohort arrives.
@@ -1669,6 +1704,8 @@ local function run_http()
           buy_in_chips = ctx.buy_in_chips,
           wait_for_ready = ctx.wait_for_ready == true,
           require_start_flags = ctx.wait_for_ready == true,
+          min_players_to_start = ctx.min_players_to_start or 2,
+          start_grace_sec = ctx.start_grace_sec or 0,
           first_hand_started = ctx.first_hand_started == true,
           pending_join_count = ctx.pending_join_count or 0,
         }
@@ -2422,6 +2459,8 @@ local function run_http()
         hidden = ctx.hidden == true,
         wait_for_ready = ctx.wait_for_ready == true,
         require_start_flags = ctx.wait_for_ready == true,
+        min_players_to_start = ctx.min_players_to_start or 2,
+        start_grace_sec = ctx.start_grace_sec or 0,
         first_hand_started = ctx.first_hand_started == true,
         pending_join_count = ctx.pending_join_count or 0,
       }
@@ -2477,6 +2516,9 @@ local function run_http()
       or j.wait_for_ready == true
       or j.wait_for_start_flags == true
 
+    local min_to_start = tonumber(j.min_players_to_start)
+    local sgs = tonumber(j.start_grace_sec)
+
     s.tables[tid] = create_table_context(tid, max_seats, {
       with_ais = with_ais,
       sb_amount = math.max(1, math.floor(sb)),
@@ -2488,6 +2530,8 @@ local function run_http()
       action_timeout_mode = atm,
       hidden = hidden,
       wait_for_ready = require_start_flags,
+      min_players_to_start = min_to_start,
+      start_grace_sec = sgs,
     })
 
     io.stderr:write(
@@ -2566,6 +2610,8 @@ local function run_http()
       action_timeout_mode = c.action_timeout_mode,
       wait_for_ready = c.wait_for_ready == true,
       require_start_flags = c.wait_for_ready == true,
+      min_players_to_start = c.min_players_to_start or 2,
+      start_grace_sec = c.start_grace_sec or 0,
       first_hand_started = c.first_hand_started == true,
       pending_join_count = c.pending_join_count or 0,
       ready_status = ready_status_snapshot(c),
@@ -2742,6 +2788,25 @@ local function run_http()
         c.action_timeout_mode = atm
       end
     end
+    if j.start_grace_sec ~= nil then
+      local sgs = tonumber(j.start_grace_sec)
+      if sgs then
+        sgs = math.floor(sgs)
+        if sgs < 0 then sgs = 0 end
+        c.start_grace_sec = sgs
+      end
+    end
+    if j.min_players_to_start ~= nil then
+      local mps = tonumber(j.min_players_to_start)
+      if mps then
+        mps = math.floor(mps)
+        if mps < 2 then mps = 2 end
+        --- Cap to the table's seat capacity so the gate can't deadlock.
+        local cap = (c.tbl and c.tbl.max_seats) or 10
+        if mps > cap then mps = cap end
+        c.min_players_to_start = mps
+      end
+    end
     local start_flag_setting = j.require_start_flags
     if start_flag_setting == nil then
       start_flag_setting = j.wait_for_start_flags
@@ -2778,6 +2843,8 @@ local function run_http()
       .. " buy_in=" .. tostring(c.buy_in_chips)
       .. " action_timeout=" .. tostring(c.action_timeout_sec) .. "s " .. tostring(c.action_timeout_mode)
       .. " wait_for_ready=" .. tostring(c.wait_for_ready)
+      .. " min_players_to_start=" .. tostring(c.min_players_to_start)
+      .. " start_grace_sec=" .. tostring(c.start_grace_sec)
       .. "\n")
     return {
       ok = true,
@@ -2790,6 +2857,8 @@ local function run_http()
       action_timeout_mode = c.action_timeout_mode,
       wait_for_ready = c.wait_for_ready,
       require_start_flags = c.wait_for_ready == true,
+      min_players_to_start = c.min_players_to_start,
+      start_grace_sec = c.start_grace_sec,
       first_hand_started = c.first_hand_started == true,
       pending_join_count = c.pending_join_count or 0,
     }

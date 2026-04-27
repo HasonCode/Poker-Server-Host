@@ -243,7 +243,13 @@
           </label>
           <label class="field cb-field">
             <input type="checkbox" id="setRequireStartFlags" />
-            <span>Require player start flags before the first hand after the table has been empty</span>
+            <span>Require player start flags (lobby + ready gate) before each hand</span>
+          </label>
+          <label class="field"><span>Min players to start</span>
+            <input type="number" id="setMinPlayersToStart" min="2" max="10" value="2" title="The ready gate won't release the lobby until this many players are present and ready. Set to your expected cohort size (e.g. 4 for a 4-handed game) so the first hand waits for everyone instead of dealing to the first 2 to ready." />
+          </label>
+          <label class="field"><span>Start grace (sec)</span>
+            <input type="number" id="setStartGraceSec" min="0" value="8" title="After the last join/ready, wait this many seconds before dealing. Resets on every new join or ready signal so slow joiners can catch up." />
           </label>
           <button type="submit" class="btn btn-accent btn-sm">Update Settings</button>
         </form>

@@ -58,8 +58,14 @@ The lobby is **continuous** — it applies before the first hand *and* between e
 
 The lobby releases when **either**:
 
-- every lobby member has signalled readiness (with at least two participants total — seated + ready lobby members) **and** the start-grace window has elapsed (default 8s, env `POKER_START_GRACE_SEC`), **or**
-- `action_timeout_sec` has elapsed since the *first* ready signal of the current lobby cohort arrived **and** at least two participants are ready — in which case any lobby member who never readied is **fully ejected from the table** (their lobby slot is dropped, their auth token is invalidated, and any running bot is killed) before the rest are seated.
+- every lobby member has signalled readiness, **the post-release total (seated + ready lobby members) is at least `min_players_to_start`** (default 2), **and** the start-grace window has elapsed (default 8s, env `POKER_START_GRACE_SEC`), **or**
+- `action_timeout_sec` has elapsed since the *first* ready signal of the current lobby cohort arrived **and** at least `min_players_to_start` participants are ready — in which case any lobby member who never readied is **fully ejected from the table** (their lobby slot is dropped, their auth token is invalidated, and any running bot is killed) before the rest are seated.
+
+### Holding the gate for the full cohort
+
+By default `min_players_to_start = 2`, which is the engine's absolute minimum. **If you are running an N-handed game and want hand 1 to wait for *all* N players to join + ready (instead of dealing immediately as soon as the first 2 ready), set `min_players_to_start: N`** when you create the table or via `/admin/api/tables/:id/settings`. The gate will then refuse to release until that many participants are present and ready, regardless of how quickly the early joiners flip their flags. Combine it with a generous `start_grace_sec` (e.g. 15–30s) for an even more forgiving window when joiners are still trickling in. The value is clamped to `[2, max_seats]` so it cannot deadlock.
+
+You can set the same defaults globally via `POKER_MIN_PLAYERS_TO_START` and `POKER_START_GRACE_SEC` environment variables.
 
 When the lobby releases, lobby members are **randomly shuffled across the free seats** of the table, blinds are posted, and cards are dealt. Players already seated keep their seat. The optional `seat` field on `POST /join` is ignored while the gate is active — placement of new joiners is randomized by design.
 
@@ -94,6 +100,8 @@ X-Player-Token: <token from /join>
     "lobby_players": ["MyBot", "OtherBot"],
     "all_ready": false,
     "first_ready_received": true,
+    "min_players_to_start": 4,
+    "start_grace_sec": 8,
     "start_timeout_sec": 60,
     "start_timeout_remaining_sec": 47
   },
@@ -527,3 +535,12 @@ See `src/poker/bot_runner.lua` and `bots/example_bot.lua`. Run with Lua on your 
 ## Admin / OAuth
 
 Routes under `/admin/...` are for operators (OAuth, snapshots, kicks). They are **not** required for user bots using `join` / `state` / `my-turn` / `actions`.
+
+**Who can log in:** Configure Google OAuth with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, then list one or more Google accounts:
+
+- **`ADMIN_EMAIL`** — one address, or several separated by commas (e.g. `you@example.com,colleague@example.com`).
+- **`ADMIN_EMAILS`** — optional extra comma-separated list merged with `ADMIN_EMAIL` (handy when `ADMIN_EMAIL` is already set by another layer and you only need to append more).
+
+Matching is case-insensitive. After you change env vars, restart the server. Each person signs in at `/admin/oauth/login` with their own Google account; only addresses in the allowlist get a session cookie.
+
+If your OAuth client is in **Testing** mode in Google Cloud Console, add every admin as a **Test user** under APIs & Services → OAuth consent screen, or they will get Google’s “access blocked” error even when their email is on the allowlist.
