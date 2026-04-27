@@ -57,7 +57,7 @@ local function record_drop(ctx, pid, qent, reason)
   }
 end
 
---- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table, action_queue_drops?: table, wait_for_ready?: boolean, first_hand_started?: boolean, ready_players?: { [string]: boolean } }
+--- @param ctx { tbl: table, hand: table, ai_players: { [string]: boolean }, action_queue?: table, action_queue_drops?: table, wait_for_ready?: boolean, first_hand_started?: boolean, ready_players?: { [string]: boolean }, pending_join_count?: number }
 function M.run_until_human(ctx)
   local tbl = ctx.tbl
   local hand = ctx.hand
@@ -70,6 +70,9 @@ function M.run_until_human(ctx)
     --- the first hand of each table cohort. The gate re-arms only after the
     --- table has become completely empty.
     if ctx.wait_for_ready == true and not ctx.first_hand_started then
+      if (ctx.pending_join_count or 0) > 0 and tbl:first_available_seat() then
+        return
+      end
       local seated_total = 0
       for i = 1, tbl.max_seats do
         local s = tbl:get_seat(i)

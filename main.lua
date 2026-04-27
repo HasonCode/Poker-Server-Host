@@ -258,6 +258,7 @@ local function ready_status_snapshot(ctx)
     waiting_players = waiting_list,
     all_ready = ctx.wait_for_ready == true
       and (not ctx.first_hand_started)
+      and not ((ctx.pending_join_count or 0) > 0 and tbl and tbl:first_available_seat())
       and (#waiting_list == 0)
       and (#seated >= 2),
   }
