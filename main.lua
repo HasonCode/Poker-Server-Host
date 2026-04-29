@@ -971,6 +971,90 @@ local function queue_entry(act, amt, hand, in_current_hand, expected_seq)
   return entry
 end
 
+local function kill_running_bot_for_player(ctx, pid)
+  if ctx.running_bots and ctx.running_bots[pid] then
+    kill_bot(ctx.running_bots[pid].pid)
+    ctx.running_bots[pid] = nil
+  end
+end
+
+--- Before a hand is dealt, anyone who cannot afford the big blind is treated
+--- as busted. In rebuy mode they are reseated after the hand starts, so they
+--- wait like a mid-hand joiner and participate in the next hand.
+local function bust_players_below_big_blind(ctx)
+  if not ctx or not ctx.tbl or not ctx.hand or ctx.hand.status ~= "idle" then
+    return {}
+  end
+  local bb = math.floor(tonumber(ctx.hand.bb_amount) or 0)
+  if bb < 1 then
+    return {}
+  end
+
+  local delayed_rebuys = {}
+  for i = 1, ctx.tbl.max_seats do
+    local s = ctx.tbl:get_seat(i)
+    if s and math.floor(tonumber(s.stack) or 0) < bb then
+      local pid = s.player_id
+      ctx.bust_counts = ctx.bust_counts or {}
+      ctx.bust_counts[pid] = (ctx.bust_counts[pid] or 0) + 1
+      ctx.tbl:leave_seat(i)
+      clear_player_action_state(ctx, pid)
+
+      if ctx.zero_chips == "eject" then
+        remove_player_token(ctx, pid)
+        if ctx.ai_players then ctx.ai_players[pid] = nil end
+        kill_running_bot_for_player(ctx, pid)
+        io.stderr:write(
+          "[table:" .. ctx.tbl.id .. "] Ejected " .. tostring(pid)
+            .. " (cannot afford big blind " .. tostring(bb) .. ")\n"
+        )
+      else
+        delayed_rebuys[#delayed_rebuys + 1] = {
+          seat = i,
+          player_id = pid,
+          chips = math.max(1, math.floor(tonumber(ctx.rebuy_amount) or 500)),
+        }
+        io.stderr:write(
+          "[table:" .. ctx.tbl.id .. "] Bust/rebuy " .. tostring(pid)
+            .. " (stack below big blind " .. tostring(bb) .. ")\n"
+        )
+      end
+    end
+  end
+  return delayed_rebuys
+end
+
+local function reseat_delayed_rebuys(ctx, delayed_rebuys)
+  if not ctx or not ctx.tbl or type(delayed_rebuys) ~= "table" then
+    return 0
+  end
+  local seated = 0
+  for _, entry in ipairs(delayed_rebuys) do
+    local pid = entry.player_id
+    if pid and not ctx.tbl:seat_for_player(pid) and not lobby_index(ctx, pid) then
+      local seat = entry.seat
+      if not seat or ctx.tbl:get_seat(seat) then
+        seat = ctx.tbl:first_available_seat()
+      end
+      if seat then
+        local ok = ctx.tbl:seat_player({
+          seat = seat,
+          player_id = pid,
+          chips = entry.chips,
+        })
+        if ok then
+          seated = seated + 1
+          io.stderr:write(
+            "[table:" .. ctx.tbl.id .. "] Rebuy " .. tostring(pid)
+              .. " -> " .. tostring(entry.chips) .. " chips for next hand\n"
+          )
+        end
+      end
+    end
+  end
+  return seated
+end
+
 --- @return "applied"|"queued"|nil, err [, err_details]
 local function submit_action(ctx, player_id, action, amount, queue, strict_queue, opts)
   opts = opts or {}
@@ -1077,17 +1161,31 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
         return nil, "not_seated"
       end
     end
+    local delayed_rebuys = bust_players_below_big_blind(ctx)
+    seat = tbl:seat_for_player(player_id)
+    local caller_waits_for_next_hand = not seat
     local first, perr = hand:peek_first_actor(tbl)
     if not first then
+      reseat_delayed_rebuys(ctx, delayed_rebuys)
       return nil, perr
+    end
+    if caller_waits_for_next_hand then
+      reseat_delayed_rebuys(ctx, delayed_rebuys)
+      if qfalse then
+        return nil, "wrong_turn"
+      end
+      ctx.action_queue[player_id] = queue_entry(act, amt, hand, false, expected_seq)
+      return "queued"
     end
     if first == seat then
       --- apply_action no longer auto-starts an idle hand (that bypassed the
       --- ready gate and pre-start ejection). Mirror ai.run_until_human.
       local ok_sh, err_sh = hand:start_hand(tbl)
       if not ok_sh then
+        reseat_delayed_rebuys(ctx, delayed_rebuys)
         return nil, err_sh
       end
+      reseat_delayed_rebuys(ctx, delayed_rebuys)
       ai.after_start_hand_pre_start_eject(ctx)
       ctx.first_hand_started = true
       ctx._first_ready_at = nil
@@ -1098,6 +1196,7 @@ local function submit_action(ctx, player_id, action, amount, queue, strict_queue
       ctx.action_queue[player_id] = nil
       return "applied"
     end
+    reseat_delayed_rebuys(ctx, delayed_rebuys)
     ctx.action_queue[player_id] = queue_entry(act, amt, hand, in_current_hand, expected_seq)
     return "queued"
   end
@@ -1245,10 +1344,7 @@ local function handle_zero_chips(ctx)
         clear_player_action_state(ctx, pid)
         remove_player_token(ctx, pid)
         if ctx.ai_players then ctx.ai_players[pid] = nil end
-        if ctx.running_bots and ctx.running_bots[pid] then
-          kill_bot(ctx.running_bots[pid].pid)
-          ctx.running_bots[pid] = nil
-        end
+        kill_running_bot_for_player(ctx, pid)
         io.stderr:write("[table:" .. ctx.tbl.id .. "] Ejected " .. pid .. " (zero chips)\n")
       else
         s.stack = ctx.rebuy_amount or 500
@@ -1292,7 +1388,12 @@ local function table_snapshot(ctx)
     if ctx.wait_for_ready == true and ctx.hand.status == "idle" then
       release_lobby_to_table(ctx)
     end
+    local delayed_rebuys = {}
+    if ctx.hand.status == "idle" then
+      delayed_rebuys = bust_players_below_big_blind(ctx)
+    end
     ai.run_until_human(ctx)
+    reseat_delayed_rebuys(ctx, delayed_rebuys)
   end
   local snap = api.table_state_snapshot(ctx.tbl, ctx.hand, ctx.action_queue, ctx.action_queue_drops)
   snap.zero_chips = ctx.zero_chips
