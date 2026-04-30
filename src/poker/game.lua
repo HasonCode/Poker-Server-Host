@@ -725,16 +725,17 @@ function HandState:apply_action(tbl, player_id, action, amount)
       return nil, "nothing_to_call"
     end
     if st.stack < need then
-      return nil, "insufficient_chips"
+      action = "all_in"
+    else
+      st.stack = st.stack - need
+      self.pot = self.pot + need
+      self.contribution[seat] = c + need
+      self.hand_bets[seat] = (self.hand_bets[seat] or 0) + need
+      self.pending[seat] = nil
+      self:_log(player_id, seat, "call", need)
+      self:_after_action(tbl, seat)
+      return true
     end
-    st.stack = st.stack - need
-    self.pot = self.pot + need
-    self.contribution[seat] = c + need
-    self.hand_bets[seat] = (self.hand_bets[seat] or 0) + need
-    self.pending[seat] = nil
-    self:_log(player_id, seat, "call", need)
-    self:_after_action(tbl, seat)
-    return true
   end
 
   if action == "all_in" then

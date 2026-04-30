@@ -37,7 +37,7 @@ Replace it with `http://127.0.0.1:8080` (or your `POKER_PORT`) when developing l
 | `POST` | `/v1/tables/:id/start-flag` | Alias for `/ready` with explicit start-flag naming. |
 | `POST` | `/v1/tables/:id/actions` | Submit an action (`player_id`, `action`, optional `amount`, optional `queue`, optional `client_action_id`, optional `expected_action_seq`). **Requires** `X-Player-Token` for any seated player. |
 
-**Actions:** `fold`, `check`, `call`, `raise`, `bet`, `all_in`. For `raise` / `bet`, **`amount`** is your **total contribution this street** (not just the increment).
+**Actions:** `fold`, `check`, `call`, `raise`, `bet`, `all_in`. For `raise` / `bet`, **`amount`** is your **total contribution this street** (not just the increment). `all_in` is legal even when the stack is too small to call or make a full minimum raise; showdown side pots are awarded from each player's total committed chips. A short `call` is treated as `all_in` instead of being rejected.
 
 **Hardening fields on `POST /actions`:**
 
@@ -335,7 +335,7 @@ run_bot(decide, url="https://poker.mineblue.org", table_id="demo", player_id="In
 
 ## Example: API caller (production URL, minimum raise each action)
 
-This script uses **`PokerClient`** only (no `bot_runner` import). It connects to **`https://poker.mineblue.org`** by default, joins a table, and on every turn chooses the **cheapest legal action**: check if free, else call, else **raise to** `current_bet + min_raise_increment` (minimum legal total for that street), else fold.
+This script uses **`PokerClient`** only (no `bot_runner` import). It connects to **`https://poker.mineblue.org`** by default, joins a table, and on every turn chooses a simple minimum-pressure action: **raise to** `current_bet + min_raise_increment` when affordable, else call, else all-in if short, else check/fold.
 
 The same source lives in the repo as **`clients/python/api_caller_min_bet.py`**.
 
@@ -387,7 +387,7 @@ from poker_client import PokerClient, PokerError, TransportError
 
 
 def decide_min(state: dict, me: dict) -> dict:
-    """Minimum chips to stay competitive: check > call > min-raise > fold."""
+    """Minimum pressure: min-raise when possible, else call/all-in, else check/fold."""
     hand = state.get("hand") or {}
     cb = int(hand.get("current_bet") or 0)
     mri = int(hand.get("min_raise_increment") or 1)
@@ -402,6 +402,8 @@ def decide_min(state: dict, me: dict) -> dict:
     call_need = cb - contrib
     if call_need > 0 and call_need <= stack:
         return {"action": "call"}
+    if call_need > 0 and stack > 0:
+        return {"action": "all_in"}
     if contrib >= cb:
         return {"action": "check"}
     return {"action": "fold"}

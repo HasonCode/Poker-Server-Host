@@ -80,7 +80,7 @@ def _build_me(state: dict, player_id: str) -> dict:
 
 
 def _default_strategy(state: dict, me: dict) -> dict:
-    """Built-in fallback: min-raise when possible, else call, else check."""
+    """Built-in fallback: min-raise when possible, else call/all-in, else check."""
     hand = state.get("hand") or {}
     cb = hand.get("current_bet", 0)
     mri = hand.get("min_raise_increment", 5)
@@ -93,6 +93,8 @@ def _default_strategy(state: dict, me: dict) -> dict:
     call_need = cb - contrib
     if call_need > 0 and call_need <= stack:
         return {"action": "call"}
+    if call_need > 0 and stack > 0:
+        return {"action": "all_in"}
     if contrib >= cb:
         return {"action": "check"}
     return {"action": "fold"}
