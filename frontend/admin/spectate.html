@@ -76,9 +76,17 @@
         <div class="winners hidden" id="winners"></div>
       </section>
 
-      <section class="panel log-panel">
-        <h2>Action log</h2>
-        <ol class="log" id="actionLog"></ol>
+      <section class="spectate-actions-grid">
+        <div class="panel log-panel">
+          <h2>Current Game Actions</h2>
+          <p class="sub log-sub">Actions for the hand in progress.</p>
+          <ol class="log" id="currentActionLog"></ol>
+        </div>
+        <div class="panel log-panel">
+          <h2>Past Game Actions</h2>
+          <p class="sub log-sub">Actions from the most recently completed hand.</p>
+          <ol class="log" id="pastActionLog"></ol>
+        </div>
       </section>
 
       <footer class="foot"><code id="endpointEl"></code></footer>

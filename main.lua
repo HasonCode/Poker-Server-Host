@@ -796,6 +796,7 @@ local function rearm_start_gate_if_empty(ctx)
   --- old players are gone; the new cohort tracks busts from zero.
   if ctx.hand then
     ctx.hand.last_winners = nil
+    ctx.hand.last_action_log = {}
   end
   ctx.last_hand_finished_at = nil
   ctx.bust_counts = {}
@@ -2818,6 +2819,7 @@ local function run_http()
     --- stale "last winner" pointing at chips that were just refunded,
     --- and no bust counter inherited from the previous game.
     c.hand.last_winners = nil
+    c.hand.last_action_log = {}
     c.last_hand_finished_at = nil
     c.bust_counts = {}
 

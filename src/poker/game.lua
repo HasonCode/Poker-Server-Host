@@ -14,6 +14,14 @@ local function copy_keys(t)
   return out
 end
 
+local function copy_action_log(log)
+  local out = {}
+  for i, entry in ipairs(log or {}) do
+    out[i] = copy_keys(entry)
+  end
+  return out
+end
+
 local function seat_map_to_json(t)
   local out = {}
   for k, v in pairs(t or {}) do
@@ -53,6 +61,7 @@ function HandState.new(opts)
     deck = {},
     hole_cards = {},
     last_winners = nil,
+    last_action_log = {},
   }, HandState)
 end
 
@@ -105,6 +114,7 @@ function HandState:snapshot_public()
     folded = seat_map_to_json(self.folded),
     hole_cards = hc,
     last_winners = self.last_winners,
+    last_action_log = copy_action_log(self.last_action_log),
   }
 end
 
@@ -151,6 +161,38 @@ local function next_seat_after(ring, last_seat)
     end
   end
   return ring[1]
+end
+
+local function hand_bet_levels(hand_bets, ring)
+  local seen = {}
+  local levels = {}
+  for _, seat in ipairs(ring or {}) do
+    local amount = hand_bets[seat] or 0
+    if amount > 0 and not seen[amount] then
+      seen[amount] = true
+      levels[#levels + 1] = amount
+    end
+  end
+  table.sort(levels)
+  return levels
+end
+
+local function best_seats_for_pot(eligible, evals)
+  local best = evals[eligible[1]]
+  for i = 2, #eligible do
+    local ev = evals[eligible[i]]
+    if hand_eval.compare(ev, best) > 0 then
+      best = ev
+    end
+  end
+
+  local winners = {}
+  for _, seat in ipairs(eligible) do
+    if hand_eval.compare(evals[seat], best) == 0 then
+      winners[#winners + 1] = seat
+    end
+  end
+  return winners
 end
 
 function HandState:_reset_street_betting()
@@ -282,6 +324,7 @@ function HandState:_reset_between_hands()
   for i, c in ipairs(self.community) do
     self.last_community[i] = c
   end
+  self.last_action_log = copy_action_log(self.action_log)
   self.status = "idle"
   self.street = "none"
   self.pot = 0
@@ -325,12 +368,15 @@ function HandState:_award_fold_winner(tbl)
   self.last_winners = { { seat = winner_seat, player_id = pid, amount = amount, hand_name = "fold" } }
 end
 
---- Award pot at showdown: evaluate hands, split among winners.
+--- Award pot at showdown: evaluate hands, then award each main/side pot to
+--- only the non-folded players who contributed enough chips to contest it.
 function HandState:_award_showdown(tbl)
   local active = {}
+  local active_lookup = {}
   for _, s in ipairs(self.occupied_ring) do
     if not self.folded[s] then
       active[#active + 1] = s
+      active_lookup[s] = true
     end
   end
 
@@ -349,38 +395,57 @@ function HandState:_award_showdown(tbl)
     evals[s] = hand_eval.best_of(all_cards)
   end
 
-  -- Find best eval among active players
-  local best = evals[active[1]]
-  for i = 2, #active do
-    if hand_eval.compare(evals[active[i]], best) > 0 then
-      best = evals[active[i]]
-    end
-  end
-
-  -- Collect all winners (ties split the pot)
-  local winners = {}
+  local awards = {}
   for _, s in ipairs(active) do
-    if hand_eval.compare(evals[s], best) == 0 then
-      winners[#winners + 1] = s
-    end
+    awards[s] = 0
   end
 
-  local share = math.floor(self.pot / #winners)
-  local remainder = self.pot - share * #winners
+  local prev_level = 0
+  for _, level in ipairs(hand_bet_levels(self.hand_bets, self.occupied_ring)) do
+    local contributor_count = 0
+    local eligible = {}
+
+    for _, s in ipairs(self.occupied_ring) do
+      local bet = self.hand_bets[s] or 0
+      if bet >= level then
+        contributor_count = contributor_count + 1
+        if active_lookup[s] then
+          eligible[#eligible + 1] = s
+        end
+      end
+    end
+
+    local pot_amount = (level - prev_level) * contributor_count
+    if pot_amount > 0 and #eligible > 0 then
+      local winners = best_seats_for_pot(eligible, evals)
+      local share = math.floor(pot_amount / #winners)
+      local remainder = pot_amount - share * #winners
+
+      for i, s in ipairs(winners) do
+        awards[s] = awards[s] + share
+        if i <= remainder then
+          awards[s] = awards[s] + 1
+        end
+      end
+    end
+
+    prev_level = level
+  end
 
   self.last_winners = {}
-  for i, s in ipairs(winners) do
-    local st = tbl:get_seat(s)
-    if st then
-      local award = share
-      if i <= remainder then award = award + 1 end
-      st.stack = st.stack + award
-      local pid = st.player_id or ("seat_" .. s)
-      local hname = hand_eval.hand_name(evals[s])
-      self:_log(pid, s, "win", award)
-      self.last_winners[#self.last_winners + 1] = {
-        seat = s, player_id = pid, amount = award, hand_name = hname,
-      }
+  for _, s in ipairs(active) do
+    local award = awards[s] or 0
+    if award > 0 then
+      local st = tbl:get_seat(s)
+      if st then
+        st.stack = st.stack + award
+        local pid = st.player_id or ("seat_" .. s)
+        local hname = hand_eval.hand_name(evals[s])
+        self:_log(pid, s, "win", award)
+        self.last_winners[#self.last_winners + 1] = {
+          seat = s, player_id = pid, amount = award, hand_name = hname,
+        }
+      end
     end
   end
 end
@@ -498,6 +563,7 @@ function HandState:start_hand(tbl)
   self.occupied_ring = occ
   self.folded = {}
   self.contribution = {}
+  self.hand_bets = {}
   self.pot = 0
   self.community = {}
   self.action_log = {}

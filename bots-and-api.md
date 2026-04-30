@@ -155,7 +155,7 @@ Returns who won the most recent hand on this table. The data persists across the
 - `last_winners` is `null` when no hand has resolved for the current cohort yet (e.g. just after admin reset).
 - `had_winner` is a convenience boolean for empty-state rendering.
 - `went_to_showdown` is `false` when the hand ended on a single fold (`hand_name == "fold"`); `true` otherwise.
-- Ties split the pot — `last_winners` will have multiple entries each with a fractional `amount`. `total_awarded` sums them.
+- Ties and side pots can produce multiple `last_winners` entries. `amount` is the total chips awarded to that player across the pot layers they won; `total_awarded` sums them.
 - `finished_at` is a Unix timestamp (seconds, server clock).
 
 ### `GET /v1/tables/:id/busts`

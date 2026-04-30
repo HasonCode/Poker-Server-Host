@@ -19,7 +19,8 @@
   const communityEl = $("#community");
   const feltWrap = $("#feltWrap");
   const feltPotVal = $("#feltPotVal");
-  const actionLog = $("#actionLog");
+  const currentActionLog = $("#currentActionLog");
+  const pastActionLog = $("#pastActionLog");
 
   const POLL_MS = 1500;
   let pollTimer = null;
@@ -214,13 +215,13 @@
     }
   }
 
-  function renderLog(hand) {
-    actionLog.replaceChildren();
-    const log = hand.action_log || [];
+  function renderLog(target, log, emptyText) {
+    target.replaceChildren();
+    log = Array.isArray(log) ? log : [];
     if (log.length === 0) {
       const li = document.createElement("li");
-      li.textContent = "No actions yet.";
-      actionLog.appendChild(li);
+      li.textContent = emptyText;
+      target.appendChild(li);
       return;
     }
     log.forEach((entry) => {
@@ -235,9 +236,18 @@
         " <span style='color:var(--muted);font-size:0.75rem'>[" +
         esc(entry.street) +
         "]</span>";
-      actionLog.appendChild(li);
+      target.appendChild(li);
     });
-    actionLog.scrollTop = actionLog.scrollHeight;
+    target.scrollTop = target.scrollHeight;
+  }
+
+  function renderActionPanels(hand) {
+    renderLog(
+      currentActionLog,
+      hand.action_log || [],
+      hand.status === "active" ? "No current-hand actions yet." : "No active hand."
+    );
+    renderLog(pastActionLog, hand.last_action_log || [], "No completed hand actions yet.");
   }
 
   function renderAll(data) {
@@ -292,7 +302,7 @@
       winnersEl.classList.add("hidden");
     }
 
-    renderLog(hand);
+    renderActionPanels(hand);
 
     const tid = tableSelect.value || data.table_id || "";
     barStatus.textContent = "Live — " + (tid ? "table " + tid : "select a table");
