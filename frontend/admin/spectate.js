@@ -19,7 +19,7 @@
   const communityEl = $("#community");
   const feltWrap = $("#feltWrap");
   const feltPotVal = $("#feltPotVal");
-  const currentActionLog = $("#currentActionLog");
+  const currentActionLog = $("#currentActionLog") || $("#actionLog");
   const pastActionLog = $("#pastActionLog");
 
   const POLL_MS = 1500;
@@ -216,6 +216,7 @@
   }
 
   function renderLog(target, log, emptyText) {
+    if (!target) return;
     target.replaceChildren();
     log = Array.isArray(log) ? log : [];
     if (log.length === 0) {
